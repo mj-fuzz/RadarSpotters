@@ -1,6 +1,6 @@
 import { NoiseTex } from './noise';
 import { Rng } from './rng';
-import { cellShape, partEnvelope, smoothstep, type StormCell, type Weather } from './weather';
+import { cellShape, mesoCycle, partEnvelope, smoothstep, type StormCell, type Weather } from './weather';
 
 /** Radar range, km. The grid covers a square of +/- RANGE_KM around the radar. */
 export const RANGE_KM = 230;
@@ -87,13 +87,17 @@ export class Fields {
     const stratB = b * 1.9;
     const stratTop = 20 + 9 * strat;
 
-    // How developed the supercell's rotation is (ignores the strengthen/weaken cycle).
-    const hookFrac = c.rot > 0 ? smoothstep((t - 0.12) / 0.2) * (1 - smoothstep((t - 0.82) / 0.15)) : 0;
-    const cycle = hookFrac > 0 ? meso / (c.rot * hookFrac) : 0;
+    // The hook is the sign of a supercell at full strength: it only forms once the storm is
+    // really cranking, fades whenever the mesocyclone weakens (recycles), and is gone well
+    // before the storm itself dies. Rotation in velocity shows up earlier than the hook.
+    const hookFrac =
+      c.rot > 0
+        ? smoothstep((t - 0.3) / 0.15) * (1 - smoothstep((t - 0.62) / 0.13)) * smoothstep((mesoCycle(c) - 0.45) / 0.35)
+        : 0;
     const swirls: Swirl[] = [];
-    if (hookFrac > 0) {
+    if (hookFrac > 0.01) {
       // The rain behind the storm gets dragged around the mesocyclone into a hook.
-      swirls.push({ x: mesoX, y: mesoY, turn: 2.7 * hookFrac * (0.55 + 0.45 * cycle), size: 0.6 * b });
+      swirls.push({ x: mesoX, y: mesoY, turn: 2.7 * hookFrac, size: 0.6 * b });
     }
     if (isBow) {
       // Bookend vortex: the north (left) end of a bow curls up into a comma head.
@@ -192,7 +196,9 @@ export class Fields {
           const vn = v / L;
           // The line bulges forward in the middle; past the ends it just carries on straight.
           const vc = Math.max(-1, Math.min(1, vn));
-          const front = A * L * 1.2 * (1 - vc * vc) - A * L * 0.6;
+          // The leading edge wobbles: bulges where cores surge ahead, dents in between.
+          const wobble = (noise.sample(v * 0.35 + c.seedY, c.seedX + evolve * 0.25) - 0.5) * 14 + (n1 - 0.5) * 4;
+          const front = A * L * 1.2 * (1 - vc * vc) - A * L * 0.6 + wobble;
           const dl = u - front; // + ahead of the line, - behind it
           const endF = 1 - smoothstep((Math.abs(vn) - (vn < 0 ? 0.85 : 0.95)) / 0.3);
           // Big lumps and small cells along the line: a chain of storms, not a smooth tube.
@@ -203,7 +209,7 @@ export class Fields {
           const brk = broken * Math.max(0, 0.62 - cellsN) * 90;
 
           // Convective line: razor-sharp leading edge, ~10 km of heavy cores behind it.
-          const w = dl > 0 ? 1.8 : 9 * (0.6 + lumps * 0.8) * (1 + (n2 - 0.5) * 0.5);
+          const w = dl > 0 ? 3 * (0.6 + lumps) : 13 * (0.45 + lumps) * (1 + (n2 - 0.5) * 0.6);
           const apex = 4 * Math.max(0, 1 - vn * vn);
           const lineBase = -22 * (dl / w) * (dl / w) + (n2 - 0.5) * 10 + (n3 - 0.5) * 8 - brk - (1 - endF) * 90;
           const dbzLine = peak - 8 + apex + (lumps - 0.5) * 16 + (cellsN - 0.5) * 10 + lineBase;
@@ -215,8 +221,8 @@ export class Fields {
             const h2 = hash(k + 7919, c.id);
             const h3 = hash(k - 104729, c.id);
             const cv = (k + h1) * CORE_SPACING;
-            const cu = -(1.5 + 3 * h2); // just behind the leading edge
-            const rr = 2.5 + 3 * h3;
+            const cu = 1 - 7 * h2; // around the leading edge, some surging ahead
+            const rr = 3.5 + 5 * h3;
             const ev = (v - cv) / (rr * 1.9);
             const eu = (dl - cu) / rr;
             // Cores slowly strengthen and weaken with time.

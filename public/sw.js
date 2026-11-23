@@ -1,6 +1,6 @@
 // Radar Spotters service worker: network first, fall back to cache, so the game works offline
 // once it has been opened and still picks up new versions when online.
-const CACHE = 'radar-spotters-v3';
+const CACHE = 'radar-spotters-v4';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {

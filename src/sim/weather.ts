@@ -285,7 +285,10 @@ export class Weather {
         c.childTimer -= dt;
         if (c.childTimer <= 0) {
           c.childTimer = this.childDelay(c.kind);
-          if (this.cells.length + born.length < this.day.targetCells * 1.4) born.push(this.spawnChild(c));
+          if (this.cells.length + born.length < this.day.targetCells * 1.4) {
+            const child = this.spawnChild(c);
+            if (child) born.push(child);
+          }
         }
       }
     }
@@ -297,7 +300,7 @@ export class Weather {
     // Brand new storms. More likely when the sky is "under-stormed".
     const deficit = Math.max(0, this.day.targetCells - this.cells.length) / this.day.targetCells;
     const rate = this.day.spawnPerMin * (0.3 + 2 * deficit);
-    if (r.chance(rate * dt)) this.cells.push(this.spawnFresh());
+    if (r.chance(rate * dt)) this.cells.push(...this.spawnFresh());
   }
 
   /** Age the storm's parts and bubble up new ones. */
@@ -351,11 +354,11 @@ export class Weather {
       tor.age += dt;
       tor.ox = Math.max(-1.5, Math.min(1.5, tor.ox + r.gauss() * 0.15 * dt));
       tor.oy = Math.max(-1.5, Math.min(1.5, tor.oy + r.gauss() * 0.15 * dt));
-      if (tor.age >= tor.life || t > 0.92) c.tornado = null;
+      if (tor.age >= tor.life || t > 0.75) c.tornado = null;
     } else {
       // Tornadoes like a strong, tightening mesocyclone.
       const cycle = mesoCycle(c);
-      if (t > 0.3 && t < 0.85 && cycle > 0.75 && r.chance(this.day.tornadoPerMin * dt * (c.rot / 28) * 1.6)) {
+      if (t > 0.35 && t < 0.7 && cycle > 0.75 && r.chance(this.day.tornadoPerMin * dt * (c.rot / 28) * 1.6)) {
         c.tornado = {
           age: 0,
           life: r.range(4, 16),
@@ -384,50 +387,101 @@ export class Weather {
     return 'single';
   }
 
-  private spawnFresh(): StormCell {
-    const r = this.rng;
-    let x: number;
-    let y: number;
-    if (this.boundaries.length && r.chance(0.7)) {
-      const b = r.pick(this.boundaries);
-      const along = r.range(-0.5, 0.5) * b.length;
-      const off = r.gauss() * 12;
-      x = b.x + Math.cos(b.angle) * along - Math.sin(b.angle) * off;
-      y = b.y + Math.sin(b.angle) * along + Math.cos(b.angle) * off;
-    } else {
-      // Scattered convection, a bit more likely upwind.
-      const wl = Math.hypot(this.windX, this.windY) || 1;
-      do {
-        x = r.range(-DOMAIN, DOMAIN);
-        y = r.range(-DOMAIN, DOMAIN);
-      } while ((x * this.windX + y * this.windY) / wl > r.range(-DOMAIN, DOMAIN * 1.4));
+  /**
+   * Storms need room to breathe: each one feeds on the warm, moist air around it,
+   * so a new storm can't fire right on top of another. Supercells need the most room.
+   */
+  private hasRoom(x: number, y: number, kind: CellKind, ignore?: StormCell): boolean {
+    const need = kind === 'super' ? 30 : kind === 'bow' ? 40 : 10;
+    for (const c of this.cells) {
+      if (c === ignore) continue;
+      const own = c.kind === 'bow' ? c.bowLen * 0.9 : c.radius * (c.kind === 'super' ? 3.5 : 2.2);
+      if (Math.hypot(c.x - x, c.y - y) < own + need) return false;
     }
-    let kind = this.pickKind();
-    // Bows are big: only a couple at once.
-    if (kind === 'bow' && this.cells.filter((c) => c.kind === 'bow').length >= 2) kind = 'multi';
-    return this.makeCell(kind, x, y);
+    return true;
   }
 
-  private spawnChild(p: StormCell): StormCell {
+  private spawnFresh(): StormCell[] {
+    const r = this.rng;
+    let kind = this.pickKind();
+    // Bows are big: only a couple at once.
+    if (kind === 'bow' && this.cells.some((c) => c.kind === 'bow')) kind = 'multi';
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let x: number;
+      let y: number;
+      if (this.boundaries.length && r.chance(0.7)) {
+        const b = r.pick(this.boundaries);
+        const along = r.range(-0.5, 0.5) * b.length;
+        const off = r.gauss() * 12;
+        x = b.x + Math.cos(b.angle) * along - Math.sin(b.angle) * off;
+        y = b.y + Math.sin(b.angle) * along + Math.cos(b.angle) * off;
+      } else {
+        // Scattered convection, a bit more likely upwind.
+        const wl = Math.hypot(this.windX, this.windY) || 1;
+        do {
+          x = r.range(-DOMAIN, DOMAIN);
+          y = r.range(-DOMAIN, DOMAIN);
+        } while ((x * this.windX + y * this.windY) / wl > r.range(-DOMAIN, DOMAIN * 1.4));
+      }
+      if (!this.hasRoom(x, y, kind)) continue;
+      const cell = this.makeCell(kind, x, y);
+      return kind === 'bow' ? [cell, ...this.bowCompanions(cell)] : [cell];
+    }
+    return [];
+  }
+
+  /**
+   * A bow echo is the strongest part of a bigger storm system: other storms ride
+   * along with it, off the ends of the line and back in its rain shield.
+   */
+  private bowCompanions(bow: StormCell): StormCell[] {
+    const r = this.rng;
+    const sp = Math.hypot(bow.vx, bow.vy) || 1;
+    const dx = bow.vx / sp;
+    const dy = bow.vy / sp;
+    const out: StormCell[] = [];
+    const n = r.int(2, 4);
+    for (let k = 0; k < n; k++) {
+      const end = r.chance(0.5) ? -1 : 1;
+      const side = end * bow.bowLen * r.range(1.2, 2.0);
+      const fwd = -r.range(5, 30);
+      const c = this.makeCell(r.chance(0.7) ? 'multi' : 'single', bow.x + dx * fwd + dy * side, bow.y + dy * fwd - dx * side);
+      // Same system, same motion; start at different points in their lives.
+      c.vx = bow.vx * r.range(0.85, 1.0);
+      c.vy = bow.vy * r.range(0.85, 1.0);
+      c.age = c.life * r.range(0, 0.3);
+      out.push(c);
+    }
+    return out;
+  }
+
+  private spawnChild(p: StormCell): StormCell | null {
     const r = this.rng;
     const sp = Math.hypot(p.vx, p.vy) || 1;
     const dx = p.vx / sp;
     const dy = p.vy / sp;
     // New storms fire out on the gust front, well away from the parent's core
     // (favouring the forward / right flank), or off the ends of a bow.
-    const dist = p.radius * (p.kind === 'super' ? r.range(3, 5) : r.range(2.2, 3.5));
+    const dist = p.radius * (p.kind === 'super' ? r.range(3.5, 5.5) : r.range(2.4, 3.6));
     const ang = r.range(-0.5, 1.3); // radians from straight ahead, positive = to the right
     let fwd = dist * Math.cos(ang);
     let side = dist * Math.sin(ang);
     if (p.kind === 'bow') {
-      fwd = r.range(-5, 5);
-      side = (r.chance(0.5) ? -1 : 1) * p.bowLen * r.range(0.9, 1.3);
+      fwd = r.range(-15, 0);
+      side = (r.chance(0.5) ? -1 : 1) * p.bowLen * r.range(1.1, 1.6);
     }
     const x = p.x + dx * fwd + dy * side;
     const y = p.y + dy * fwd - dx * side;
     let kind: CellKind = r.chance(0.55) ? 'single' : 'multi';
-    if (p.kind === 'super' && r.chance(this.day.mix[2])) kind = 'super';
-    return this.makeCell(kind, x, y);
+    if (p.kind === 'super' && r.chance(this.day.mix[2] * 0.6)) kind = 'super';
+    // Children of a bow belong to its system; everyone else needs room to breathe.
+    if (p.kind !== 'bow' && !this.hasRoom(x, y, kind, p)) return null;
+    const c = this.makeCell(kind, x, y);
+    if (p.kind === 'bow') {
+      c.vx = p.vx * 0.92;
+      c.vy = p.vy * 0.92;
+    }
+    return c;
   }
 
   private makeCell(kind: CellKind, x: number, y: number): StormCell {
