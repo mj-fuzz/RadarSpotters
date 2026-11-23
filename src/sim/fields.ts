@@ -74,7 +74,7 @@ export class Fields {
     const L = s.bowL;
     const A = s.bowAmt;
 
-    const ext = isBow ? L * 1.3 + 60 : a * 5 + 12;
+    const ext = isBow ? L * 1.3 + 90 : a * 5 + 12;
     const i0 = Math.max(0, Math.floor((c.x - ext + RANGE_KM) / KM_PER_PX));
     const i1 = Math.min(GRID - 1, Math.ceil((c.x + ext + RANGE_KM) / KM_PER_PX));
     const j0 = Math.max(0, Math.floor((RANGE_KM - (c.y + ext)) / KM_PER_PX));
@@ -97,19 +97,30 @@ export class Fields {
     }
     if (isBow) {
       // Bookend vortex: the north (left) end of a bow curls up into a comma head.
-      const fu = A * L * 0.9 * (1 - 0.95 * 0.95) - A * L * 0.45;
+      const fu = A * L * 1.2 * (1 - 0.95 * 0.95) - A * L * 0.6;
       swirls.push({
         x: c.x + dirX * fu - rightX * 0.95 * L,
         y: c.y + dirY * fu - rightY * 0.95 * L,
         turn: 2.8 * A,
         size: 0.35 * L,
       });
+      // The south (right) end spins the other way and breaks into separate cells.
+      swirls.push({
+        x: c.x + dirX * fu + rightX * 0.95 * L,
+        y: c.y + dirY * fu + rightY * 0.95 * L,
+        turn: -1.3 * A,
+        size: 0.25 * L,
+      });
     }
+    // Everything fades away over the last part of a storm's life (no vanishing in one scan).
+    const deathDb = 45 * smoothstep((t - 0.78) / 0.22);
+    const deathZ = Math.exp(-deathDb * LN10_10);
+    const deathTop = 1 - smoothstep((t - 0.8) / 0.2);
 
     // Outflow: inflow while growing, pushing out once the downdraft takes over.
     const outflow = isBow
       ? 0
-      : (c.kind === 'single' ? 9 : 15) * smoothstep((t - 0.35) / 0.3) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15)) -
+      : (c.kind === 'single' ? 6 : 10) * smoothstep((t - 0.35) / 0.3) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15)) -
         4 * (t < 0.35 ? s.strength : 0);
     const ro = b * 0.9;
     const mesoRc = 3;
@@ -120,7 +131,10 @@ export class Fields {
       : c.kind === 'single' || c.peakDbz < 50
         ? 0
         : smoothstep((t - 0.45) / 0.15);
-    const gustR = isBow ? 5 + 10 * smoothstep((t - 0.25) / 0.5) : b * (1.4 + 1.8 * smoothstep((t - 0.4) / 0.5));
+    const gustR = isBow ? 2.5 + 3.5 * smoothstep((t - 0.25) / 0.5) : b * (1.4 + 1.8 * smoothstep((t - 0.4) / 0.5));
+    // Bows: how far back the trailing rain shield reaches (it grows as the system matures).
+    const shieldDepth = 25 + 45 * smoothstep((t - 0.1) / 0.5);
+    const shieldStr = smoothstep((t - 0.05) / 0.35);
 
     const tor = c.tornado;
     let torX = 0;
@@ -178,48 +192,77 @@ export class Fields {
           const vn = v / L;
           // The line bulges forward in the middle; past the ends it just carries on straight.
           const vc = Math.max(-1, Math.min(1, vn));
-          const front = A * L * 0.9 * (1 - vc * vc) - A * L * 0.45;
+          const front = A * L * 1.2 * (1 - vc * vc) - A * L * 0.6;
           const dl = u - front; // + ahead of the line, - behind it
-          const endF = 1 - smoothstep((Math.abs(vn) - 0.8) / 0.35);
-          // Lumpy along its length: a chain of cores rather than a smooth tube.
+          const endF = 1 - smoothstep((Math.abs(vn) - (vn < 0 ? 0.85 : 0.95)) / 0.3);
+          // Big lumps and small cells along the line: a chain of storms, not a smooth tube.
           const lumps = noise.sample(v * 1.1 + c.seedX, c.seedY + evolve * 0.4);
-          const w = (dl > 0 ? 2.4 : 9) * (0.55 + lumps * 0.9) * (1 + (n2 - 0.5) * 0.7);
-          const apex = 4 * Math.max(0, 1 - vn * vn);
-          const dbzLine =
-            peak - 8 + apex + (lumps - 0.5) * 40 - 24 * (dl / w) * (dl / w) + (n1 - 0.5) * 16 + (n2 - 0.5) * 12 + (n3 - 0.5) * 9 - (1 - endF) * 90;
-          if (dbzLine > 0) zAdd += zOf(dbzLine);
+          const cellsN = noise.sample(v * 2.8 + c.seedY, dl * 0.6 + c.seedX - evolve * 0.7);
+          // The south end breaks up into separate cells as the bow matures.
+          const broken = smoothstep((vn - 0.3) / 0.5) * Math.min(1, A * 2);
+          const brk = broken * Math.max(0, 0.62 - cellsN) * 90;
 
-          // Trailing rain shield, with a rear-inflow notch behind the apex.
-          const sd = -dl;
-          if (sd > 4) {
-            const nv = vn / 0.28;
-            const ns = (sd - 16) / 9;
-            const notch = 24 * A * Math.exp(-nv * nv) * Math.exp(-ns * ns);
-            const g = (sd - 26) / 22;
-            const gS = g * g + vn * vn * 1.3;
-            const dbzS = 20 + 14 * strat - 16 * gS - notch + (n1 - 0.5) * 22 + (n2 - 0.5) * 10 + (n3 - 0.5) * 8;
-            if (dbzS > 0) zAdd += zOf(dbzS);
-            if (sd < 55 && endF > 0.3) topVal = Math.max(topVal, 24 + 6 * strat);
+          // Convective line: razor-sharp leading edge, ~10 km of heavy cores behind it.
+          const w = dl > 0 ? 1.8 : 9 * (0.6 + lumps * 0.8) * (1 + (n2 - 0.5) * 0.5);
+          const apex = 4 * Math.max(0, 1 - vn * vn);
+          const lineBase = -22 * (dl / w) * (dl / w) + (n2 - 0.5) * 10 + (n3 - 0.5) * 8 - brk - (1 - endF) * 90;
+          const dbzLine = peak - 8 + apex + (lumps - 0.5) * 16 + (cellsN - 0.5) * 10 + lineBase;
+          if (dbzLine > 0) zAdd += zOf(dbzLine);
+          // Individual storm cores strung along the line, each with its own strength.
+          const k0 = Math.floor(v / CORE_SPACING);
+          for (let k = k0 - 1; k <= k0 + 1; k++) {
+            const h1 = hash(k, c.id);
+            const h2 = hash(k + 7919, c.id);
+            const h3 = hash(k - 104729, c.id);
+            const cv = (k + h1) * CORE_SPACING;
+            const cu = -(1.5 + 3 * h2); // just behind the leading edge
+            const rr = 2.5 + 3 * h3;
+            const ev = (v - cv) / (rr * 1.9);
+            const eu = (dl - cu) / rr;
+            // Cores slowly strengthen and weaken with time.
+            const pulse = Math.sin(c.age * 0.12 + h2 * 6.283);
+            const dbzC = peak - 4 + (h3 - 0.5) * 14 + pulse * 5 + apex - 14 * (ev * ev + eu * eu) - brk - (1 - endF) * 90 + (n3 - 0.5) * 8;
+            if (dbzC > 0) zAdd += zOf(dbzC);
           }
-          const endD = Math.max(0, Math.abs(vn) - 0.85) * L;
-          const hd = dl / (dl > 0 ? 7 : 16);
+
+          // Trailing rain shield: a big area of moderate rain, a quieter "transition zone"
+          // just behind the line, and a rear-inflow notch behind the apex.
+          const sd = -dl;
+          if (sd > 2 && shieldStr > 0) {
+            const g = (sd - shieldDepth * 0.55) / (shieldDepth * 0.55);
+            const lat = vn / 1.05;
+            const gS = g * g + lat * lat * lat * lat;
+            const tz = (sd - 13) / 6;
+            const trans = 6 * Math.exp(-tz * tz);
+            const nv = vn / 0.3;
+            const ns = (sd - 12) / 8;
+            const notch = 22 * A * Math.exp(-nv * nv) * Math.exp(-ns * ns);
+            const dbzS =
+              18 + 24 * shieldStr - 14 * gS - trans - notch - broken * 12 + (n1 - 0.5) * 18 + (n2 - 0.5) * 12 + (n3 - 0.5) * 8;
+            if (dbzS > 0) zAdd += zOf(dbzS);
+            if (gS < 1) topVal = Math.max(topVal, (24 + 10 * shieldStr) * (1 - 0.3 * gS));
+          }
+          const endD = Math.max(0, Math.abs(vn) - 0.9) * L;
+          const hd = dl > 0 ? dl / 5 : Math.max(0, sd - shieldDepth) / 12;
           minD2 = hd * hd + (endD / 10) * (endD / 10);
           const bw = dl / (w * 1.8);
           const band = 1 - bw * bw;
-          if (band > 0) topVal = Math.max(topVal, topNow * band * endF);
+          if (band > 0) topVal = Math.max(topVal, topNow * band * endF * (1 - broken * 0.3));
 
-          // Gust front ahead of the bow.
-          if (gustOn > 0 && Math.abs(vn) < 1.15) {
-            const gd = (dl - gustR * (1 + (n1 - 0.5) * 0.25)) / 1.1;
-            const dbzG = 14 * gustOn - 9 * gd * gd + (n3 - 0.5) * 14 - Math.max(0, Math.abs(vn) - 0.85) * 150;
+          // Gust front hugging the leading edge.
+          if (gustOn > 0 && Math.abs(vn) < 1.05) {
+            const gd = (dl - gustR * (1 + (n1 - 0.5) * 0.3)) / 0.9;
+            const dbzG = 18 * gustOn - 10 * gd * gd + (n3 - 0.5) * 12 - Math.max(0, Math.abs(vn) - 0.85) * 150;
             if (dbzG > 0) zAdd += zOf(dbzG);
           }
 
-          // Rear-inflow jet: the damaging wind that pushes the bow out.
-          const jb = (dl + 8) / 10;
-          const jv = vn / 0.65;
-          const ja = dl / 4;
-          jetU = 34 * s.strength * (0.3 + A) * Math.exp(-jb * jb) * Math.exp(-jv * jv) * (dl > 0 ? Math.exp(-ja * ja) : 1);
+          // Damaging straight-line winds: the rear-inflow jet comes down and surges out
+          // along the whole leading edge, strongest behind the apex.
+          const jb = (dl + 4) / 9;
+          const jv = vn / 0.85;
+          const ja = (dl - gustR) / 2.5;
+          jetU =
+            44 * s.strength * (0.4 + A) * Math.exp(-jb * jb) * Math.exp(-jv * jv) * (dl > gustR ? Math.exp(-ja * ja) : 1) * endF;
         } else {
           // ---- Cells built from parts -----------------------------------------
           for (let k = 0; k < c.parts.length; k++) {
@@ -306,8 +349,9 @@ export class Fields {
         // Fade out softly before the edge of this cell's drawing box (no straight cut-off edges).
         const edge = 1 - Math.max(Math.abs(rdx), Math.abs(rdy)) / ext;
         const fade = edge < 0.2 ? smoothstep(edge / 0.2) : 1;
-        if (zAdd > 0) this.z[idx] += zAdd * fade;
-        if (topVal * fade > this.top[idx]) this.top[idx] = topVal * fade;
+        if (zAdd > 0) this.z[idx] += zAdd * fade * deathZ;
+        topVal *= fade * deathTop;
+        if (topVal > this.top[idx]) this.top[idx] = topVal;
 
         // ---- Winds --------------------------------------------------------------
         const turb = 7 * s.strength * Math.max(0, 1 - minD2 / 6) * fade;
@@ -340,6 +384,16 @@ export class Fields {
       }
     }
   }
+}
+
+/** Spacing of the storm cores along a bow echo's line, km. */
+const CORE_SPACING = 11;
+
+/** Repeatable pseudo-random number 0..1 for an integer pair. */
+function hash(a: number, b: number): number {
+  let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
 /** Rankine vortex tangential wind, tapered so it fades out far from the centre. */

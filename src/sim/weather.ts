@@ -66,6 +66,8 @@ export interface StormCell {
   tornado: Tornado | null;
   /** Bow echoes: half-length of the line, km. */
   bowLen: number;
+  /** Bow echoes: how far this one will bow out (0.2 = stays a fairly straight squall line, 0.9 = big bow). */
+  bowMax: number;
   parts: Part[];
   /** Minutes until the next new part bubbles up. */
   partTimer: number;
@@ -109,7 +111,7 @@ export const DAY_TYPES = {
     targetCells: 18,
     spawnPerMin: 0.6,
     childPerMin: 0.09,
-    mix: [0.4, 0.38, 0.16, 0.06],
+    mix: [0.42, 0.4, 0.12, 0.06],
     tornadoPerMin: 0.02,
     windKmh: [35, 55],
   },
@@ -308,6 +310,8 @@ export class Weather {
     c.parts = c.parts.filter((p) => p.age < p.life);
     if (t > 0.85) return;
     c.partTimer -= dt;
+    // A multicell always keeps a couple of updrafts going until it starts dying.
+    if (c.kind === 'multi' && c.parts.filter((p) => p.age < p.life * 0.7).length < 2) c.partTimer = 0;
     if (c.partTimer > 0) return;
 
     if (c.kind === 'multi') {
@@ -409,9 +413,12 @@ export class Weather {
     const sp = Math.hypot(p.vx, p.vy) || 1;
     const dx = p.vx / sp;
     const dy = p.vy / sp;
-    // New updrafts favour the forward / right flank (downshear), or the ends of a bow.
-    let fwd = p.radius * r.range(0.6, 1.6);
-    let side = p.radius * r.range(-0.8, 1.4);
+    // New storms fire out on the gust front, well away from the parent's core
+    // (favouring the forward / right flank), or off the ends of a bow.
+    const dist = p.radius * (p.kind === 'super' ? r.range(3, 5) : r.range(2.2, 3.5));
+    const ang = r.range(-0.5, 1.3); // radians from straight ahead, positive = to the right
+    let fwd = dist * Math.cos(ang);
+    let side = dist * Math.sin(ang);
     if (p.kind === 'bow') {
       fwd = r.range(-5, 5);
       side = (r.chance(0.5) ? -1 : 1) * p.bowLen * r.range(0.9, 1.3);
@@ -478,10 +485,10 @@ export class Weather {
     } else {
       // Bow echo: a fast-moving line that bulges out where the wind is strongest.
       radius = r.range(8, 11);
-      bowLen = r.range(30, 60);
-      peakDbz = r.range(52, 62);
+      bowLen = r.range(35, 70);
+      peakDbz = r.range(50, 60);
       top = r.range(42, 54);
-      life = r.range(100, 180);
+      life = r.range(120, 220);
       elong = 1;
       const sp = r.range(1.15, 1.35);
       vx *= sp;
@@ -507,6 +514,7 @@ export class Weather {
       mesoPhase: r.range(0, Math.PI * 2),
       tornado: null,
       bowLen,
+      bowMax: kind === 'bow' ? r.range(0.2, 0.9) : 0,
       parts,
       partTimer: r.range(1, 5),
       childTimer: this.childDelay(kind),
@@ -570,6 +578,6 @@ export function cellShape(c: StormCell): CellShape {
   const mesoY = c.y - dirY * 0.55 * a + rightY * 0.85 * b;
   const topNow = 12 + (c.top - 12) * Math.pow(e, 0.6);
   const bowL = c.bowLen * (0.6 + 0.4 * Math.sqrt(e));
-  const bowAmt = 0.05 + 0.45 * smoothstep((t - 0.15) / 0.45);
+  const bowAmt = 0.05 + (c.bowMax - 0.05) * smoothstep((t - 0.15) / 0.45);
   return { t, strength: e, peak, a, b, dirX, dirY, rightX, rightY, strat, meso, mesoX, mesoY, topNow, bowL, bowAmt };
 }
