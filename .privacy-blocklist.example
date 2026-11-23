@@ -1,0 +1,10 @@
+# Privacy blocklist TEMPLATE.
+#
+# Copy this file to `.privacy-blocklist` (no ".example") in the same folder, then add any words
+# that must NEVER end up on GitHub, one per line: real names, nicknames, your town, street, school...
+# Matching ignores upper/lower case. Lines starting with # are ignored.
+#
+# Your real `.privacy-blocklist` is listed in .gitignore, so it stays on your computer only.
+# The git hook checks every commit against it and refuses to commit if anything matches.
+#
+# Do NOT put real words in this example file - it IS uploaded to GitHub.

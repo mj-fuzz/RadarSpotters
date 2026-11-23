@@ -81,8 +81,11 @@ export class Fields {
 
     // Hook echo wraps cyclonically around the mesocyclone.
     const mesoFrac = c.rot > 0 ? meso / c.rot : 0;
+    // The hook is a fat comma-shaped tail: it leaves the back of the core, swings out behind the
+    // storm, and curls in tighter and thinner until its tip wraps around the mesocyclone.
     const hookStart = Math.atan2(c.y - mesoY, c.x - mesoX);
-    const hookR = 0.45 * b + 1;
+    const hookD = Math.hypot(c.x - mesoX, c.y - mesoY);
+    const HOOK_SPAN = 3.8; // radians of wrap, about 220 degrees
     const mesoRc = 3.5;
 
     const tor = c.tornado;
@@ -135,7 +138,7 @@ export class Fields {
           if (dbzS > 0) zAdd += zOf(dbzS);
         }
 
-        // Supercell hook echo.
+        // Supercell hook echo + forward-flank rain shield.
         let mdx = 0;
         let mdy = 0;
         let mr = 99;
@@ -143,19 +146,27 @@ export class Fields {
           mdx = x - mesoX;
           mdy = y - mesoY;
           mr = Math.hypot(mdx, mdy);
-          if (mr < hookR * 2.5) {
+          if (mr < hookD * 1.4) {
             let dAng = Math.atan2(mdy, mdx) - hookStart;
             dAng = ((dAng % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-            const span = 3.7;
-            if (dAng < span) {
-              const along = dAng / span;
-              const ringR = hookR * (1 - 0.35 * along);
-              const wdt = 1.8 * (1 - 0.5 * along);
+            if (dAng < HOOK_SPAN) {
+              const along = dAng / HOOK_SPAN; // 0 at the core, 1 at the tip
+              // Spiral inwards: wide and fat near the core, tight and thin at the tip.
+              const ringR = hookD * (0.78 - 0.5 * along) * (1 + (n1 - 0.5) * 0.35 + (n3 - 0.5) * 0.25);
+              const wdt = hookD * (0.34 - 0.2 * along) * (1 + (n2 - 0.5) * 0.6);
               const off = (mr - ringR) / wdt;
-              const dbzH = peak - 8 - 22 * along - 14 * off * off - (1 - mesoFrac) * 35 + (n2 - 0.5) * 6;
+              const tipFade = smoothstep((along - 0.8) / 0.2) * 14;
+              const dbzH =
+                peak - 4 - 14 * along - 20 * off * off - tipFade - (1 - mesoFrac) * 35 + (n2 - 0.5) * 10 + (n3 - 0.5) * 6;
               if (dbzH > 0) zAdd += zOf(dbzH);
             }
           }
+          // Forward flank: a broad shield of rain and hail spreading downstream and to the left.
+          const fu = u - 1.3 * a;
+          const fv = v + 0.35 * b;
+          const d2f = ((fu * fu) / (4 * a * a) + (fv * fv) / (1.3 * b * b)) * warp * warp;
+          const dbzF = peak - 14 - 22 * d2f + (n2 - 0.5) * 12 - (1 - mesoFrac) * 20;
+          if (dbzF > 0) zAdd += zOf(dbzF);
         }
 
         // Tornado debris ball.

@@ -52,5 +52,5 @@ Android builds can come later by wrapping the same code with Tauri.
 
 Nothing personal goes into this repo: no real names, no absolute file paths, no personal emails.
 A git hook (`scripts/privacy-check.mjs`, enabled by `npm install`) blocks commits that contain them.
-Put any extra words that must never be committed (like real names) one per line in a local
-`.privacy-blocklist` file — it's git-ignored and never leaves your computer.
+Copy `.privacy-blocklist.example` to `.privacy-blocklist` and put any extra words that must never be committed (like real names) one per line in it. That local
+file is git-ignored and never leaves your computer.
