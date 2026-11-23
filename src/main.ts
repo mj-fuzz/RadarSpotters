@@ -1,4 +1,5 @@
 import './style.css';
+import { WARNING_MINUTES, WarningGame, reportText, type WarningKind } from './game/warnings';
 import { Geography, RADAR_ID, compass, type Polyline } from './map/geography';
 import { MODES, Scope, type Mode } from './radar/scope';
 import { Fields, RANGE_KM } from './sim/fields';
@@ -25,6 +26,13 @@ let paused = false;
 let debug = false;
 let smoothing = true;
 
+// The warning game.
+const game = new WarningGame();
+/** Which warning the player is about to draw (null = normal pan/zoom). */
+let warnMode: WarningKind | null = null;
+/** The cone being drawn right now, in km. */
+let drawing: { x0: number; y0: number; x1: number; y1: number; pointerId: number } | null = null;
+
 function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
 }
@@ -42,6 +50,8 @@ function takeScan(): void {
 
 function newDay(): void {
   weather.reset(randomSeed(), dayKey);
+  game.reset();
+  setWarnMode(null);
   takeScan();
   scope.finishReveal();
 }
@@ -126,6 +136,8 @@ function draw(): void {
 
   drawRings();
   if (scope.revealing) drawSweep();
+  drawWarnings();
+  drawReports();
   drawTowns();
   if (debug) drawDebug();
 
@@ -231,6 +243,129 @@ function drawTowns(): void {
   ctx.restore();
 }
 
+const WARN_COLORS: Record<WarningKind, [string, string]> = {
+  svr: ['255,216,74', 'SVR'],
+  tor: ['255,60,60', 'TOR'],
+};
+
+function polyPath(poly: Array<[number, number]>): void {
+  ctx.beginPath();
+  poly.forEach(([x, y], k) => (k ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
+  ctx.closePath();
+}
+
+function drawWarnings(): void {
+  ctx.save();
+  const now = weather.time;
+  ctx.font = `700 ${11 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const w of game.warnings) {
+    const [rgb, label] = WARN_COLORS[w.kind];
+    // Fade out over the last few minutes, and after expiry.
+    const left = w.expires - now;
+    const alpha = left > 5 ? 1 : left > 0 ? 0.45 + 0.55 * (left / 5) : Math.max(0, 0.45 * (1 + left / 3));
+    polyPath(w.poly);
+    ctx.fillStyle = `rgba(${rgb},${0.1 * alpha})`;
+    ctx.fill();
+    // Dark edge underneath so the outline stands out even on top of red/yellow echoes.
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 6 * dpr;
+    ctx.strokeStyle = `rgba(0,0,0,${0.7 * alpha})`;
+    ctx.stroke();
+    ctx.lineWidth = 3 * dpr;
+    ctx.strokeStyle = `rgba(${rgb},${alpha})`;
+    ctx.stroke();
+    const cx = w.poly.reduce((a, p) => a + p[0], 0) / w.poly.length;
+    const cy = w.poly.reduce((a, p) => a + p[1], 0) / w.poly.length;
+    const mins = Math.max(0, Math.ceil(left));
+    const text = left > 0 ? `${label} ${mins}m` : `${label} expired`;
+    ctx.lineWidth = 4 * dpr;
+    ctx.strokeStyle = `rgba(0,0,0,${0.8 * alpha})`;
+    ctx.strokeText(text, sx(cx), sy(cy));
+    ctx.fillStyle = `rgba(${rgb},${alpha})`;
+    ctx.fillText(text, sx(cx), sy(cy));
+  }
+  if (drawing && warnMode) {
+    const c = WarningGame.cone(drawing.x0, drawing.y0, drawing.x1, drawing.y1);
+    const [rgb] = WARN_COLORS[warnMode];
+    if (c) {
+      polyPath(c.poly);
+      ctx.fillStyle = `rgba(${rgb},0.12)`;
+      ctx.fill();
+      ctx.lineWidth = 5 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.stroke();
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.lineWidth = 2.5 * dpr;
+      ctx.strokeStyle = `rgba(${rgb},1)`;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.strokeStyle = `rgba(${rgb},0.9)`;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(sx(drawing.x0), sy(drawing.y0));
+    ctx.lineTo(sx(drawing.x1), sy(drawing.y1));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawReports(): void {
+  ctx.save();
+  const now = weather.time;
+  const size = 6 * dpr;
+  ctx.font = `700 ${10 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const r of game.reports) {
+    const age = now - r.time;
+    const alpha = age < 15 ? 1 : Math.max(0, 1 - (age - 15) / 10);
+    const x = sx(r.x);
+    const y = sy(r.y);
+    // Fresh reports pulse so you notice them.
+    if (age < 3) {
+      ctx.strokeStyle = r.warned ? `rgba(80,255,140,${0.8 - age * 0.25})` : `rgba(255,80,80,${0.8 - age * 0.25})`;
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath();
+      ctx.arc(x, y, size * (1.5 + age * 2), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = r.kind === 'tornado' ? '#ff2a2a' : r.kind === 'hail' ? '#3ce06a' : '#4aa8ff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    if (r.kind === 'tornado') {
+      ctx.moveTo(x - size, y - size * 0.8);
+      ctx.lineTo(x + size, y - size * 0.8);
+      ctx.lineTo(x, y + size);
+    } else if (r.kind === 'hail') {
+      ctx.moveTo(x, y - size);
+      ctx.lineTo(x + size, y);
+      ctx.lineTo(x, y + size);
+      ctx.lineTo(x - size, y);
+    } else {
+      ctx.rect(x - size * 0.8, y - size * 0.8, size * 1.6, size * 1.6);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    const zoom = view.scale / fitScale();
+    if (zoom > 1.6) {
+      ctx.lineWidth = 3 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      const label = reportText(r);
+      ctx.strokeText(label, x + size + 3 * dpr, y);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, x + size + 3 * dpr, y);
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
 function drawDebug(): void {
   ctx.save();
   ctx.font = `${10 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
@@ -299,6 +434,49 @@ daySelect.addEventListener('change', () => {
   daySelect.blur();
 });
 $('newday').addEventListener('click', () => newDay());
+
+const scoreEl = $('score');
+const toastsEl = $('toasts');
+const hintEl = $('hint');
+
+function setWarnMode(k: WarningKind | null): void {
+  warnMode = k;
+  drawing = null;
+  document.querySelectorAll<HTMLButtonElement>('[data-warn]').forEach((b) => b.classList.toggle('on', b.dataset.warn === k));
+  canvas.style.cursor = k ? 'cell' : 'crosshair';
+  if (k) {
+    hintEl.textContent = `${k === 'tor' ? 'TORNADO' : 'SEVERE THUNDERSTORM'} warning: press on the storm and drag the way it's moving (${WARNING_MINUTES[k]} min). Esc to cancel.`;
+    hintEl.classList.remove('hidden');
+  } else {
+    hintEl.classList.add('hidden');
+  }
+}
+document.querySelectorAll<HTMLButtonElement>('[data-warn]').forEach((b) =>
+  b.addEventListener('click', () => {
+    const k = b.dataset.warn as WarningKind;
+    setWarnMode(warnMode === k ? null : k);
+    b.blur();
+  }),
+);
+
+let lastScore = '';
+let lastToasts = '';
+function updateGameHud(): void {
+  const sc = `Score <b>${game.score}</b><br><span class="dim">✔ ${game.hits} warned · ✘ ${game.misses} missed · ${game.falseAlarms} false</span>`;
+  if (sc !== lastScore) {
+    lastScore = sc;
+    scoreEl.innerHTML = sc;
+  }
+  const html = game.toasts.map((t) => `<div class="toast${t.good ? '' : ' bad'}">${escapeHtml(t.text)}</div>`).join('');
+  if (html !== lastToasts) {
+    lastToasts = html;
+    toastsEl.innerHTML = html;
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!);
+}
 
 function setMode(m: Mode): void {
   mode = m;
@@ -418,6 +596,14 @@ let pinchDist = 0;
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
+  if (warnMode && pointers.size === 0 && e.button === 0) {
+    // Start drawing a warning cone from the storm.
+    const rect = canvas.getBoundingClientRect();
+    const x = wx((e.clientX - rect.left) * dpr);
+    const y = wy((e.clientY - rect.top) * dpr);
+    drawing = { x0: x, y0: y, x1: x, y1: y, pointerId: e.pointerId };
+    return;
+  }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -428,6 +614,11 @@ canvas.addEventListener('pointermove', (e) => {
   const rect = canvas.getBoundingClientRect();
   pointerX = e.clientX - rect.left;
   pointerY = e.clientY - rect.top;
+  if (drawing && drawing.pointerId === e.pointerId) {
+    drawing.x1 = wx(pointerX * dpr);
+    drawing.y1 = wy(pointerY * dpr);
+    return;
+  }
   const p = pointers.get(e.pointerId);
   if (!p) return;
   if (pointers.size === 1) {
@@ -444,6 +635,18 @@ canvas.addEventListener('pointermove', (e) => {
   }
 });
 const endPointer = (e: PointerEvent) => {
+  if (drawing && drawing.pointerId === e.pointerId) {
+    if (e.type === 'pointerup' && warnMode) {
+      const w = game.issue(warnMode, drawing.x0, drawing.y0, drawing.x1, drawing.y1, weather.time);
+      if (w) {
+        setWarnMode(null);
+      } else {
+        hintEl.textContent = 'Drag further! Press on the storm and drag the way it is heading.';
+      }
+    }
+    drawing = null;
+    return;
+  }
   pointers.delete(e.pointerId);
   pinchDist = 0;
 };
@@ -499,6 +702,17 @@ window.addEventListener('keydown', (e) => {
     case '_':
       setSpeed(SPEEDS[Math.max(0, SPEEDS.indexOf(speed) - 1)]);
       break;
+    case 'w':
+    case 'W':
+      setWarnMode(warnMode === 'svr' ? null : 'svr');
+      break;
+    case 't':
+    case 'T':
+      setWarnMode(warnMode === 'tor' ? null : 'tor');
+      break;
+    case 'Escape':
+      setWarnMode(null);
+      break;
     case 'd':
     case 'D':
       debug = !debug;
@@ -534,6 +748,7 @@ function frame(now: number): void {
   last = now;
 
   if (!paused) weather.update((dt * speed) / 60);
+  game.update(weather, (x, y) => geo.describe(x, y));
   if (weather.time >= nextScan) {
     scope.finishReveal(); // never leave a half-revealed scan behind
     takeScan();
@@ -546,6 +761,7 @@ function frame(now: number): void {
 
   draw();
   updateHud();
+  updateGameHud();
   updateReadout();
   requestAnimationFrame(frame);
 }
@@ -560,6 +776,7 @@ setMode('ref');
 syncSpeedButtons();
 takeScan();
 scope.finishReveal();
+game.reset();
 requestAnimationFrame(frame);
 
 // Offline / installable app support (production builds only).
@@ -573,5 +790,5 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
 
 // Handy handle for poking at the sim from the browser console during development.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).rs = { weather, view, scope, fields, setMode, newDay };
+  (window as unknown as Record<string, unknown>).rs = { weather, view, scope, fields, setMode, newDay, game };
 }

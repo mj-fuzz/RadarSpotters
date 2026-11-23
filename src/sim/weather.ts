@@ -580,6 +580,18 @@ export class Weather {
   }
 }
 
+/**
+ * How hard a storm's downdraft is blowing out along the ground right now, m/s
+ * (before gusts). Strong storms (high dBZ) blow much harder.
+ */
+export function outflowWind(c: StormCell): number {
+  if (c.kind === 'bow') return 0;
+  const t = c.age / c.life;
+  const severity = smoothstep((c.peakDbz - 45) / 17);
+  const outMax = c.kind === 'single' ? 5 + 9 * severity : c.kind === 'multi' ? 8 + 24 * severity : 10 + 18 * severity;
+  return outMax * smoothstep((t - 0.35) / 0.25) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15));
+}
+
 /** Mesocyclones strengthen and weaken in cycles: 0.35 (weak) .. 1 (strong and tight). */
 export function mesoCycle(c: StormCell): number {
   const s = Math.sin(c.age * 0.16 + c.mesoPhase);

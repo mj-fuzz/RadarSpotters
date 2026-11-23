@@ -1,6 +1,6 @@
 import { NoiseTex } from './noise';
 import { Rng } from './rng';
-import { cellShape, mesoCycle, partEnvelope, smoothstep, type StormCell, type Weather } from './weather';
+import { cellShape, mesoCycle, outflowWind, partEnvelope, smoothstep, type StormCell, type Weather } from './weather';
 
 /** Radar range, km. The grid covers a square of +/- RANGE_KM around the radar. */
 export const RANGE_KM = 230;
@@ -124,12 +124,10 @@ export class Fields {
     // Outflow: inflow while growing, then the downdraft hits the ground and spreads out.
     // Strong storms (high dBZ) blow out much harder: severe thunderstorm winds are
     // far more common than tornadoes. m/s (x2 for knots).
-    const severity = smoothstep((c.peakDbz - 45) / 17);
-    const outMax = c.kind === 'single' ? 5 + 9 * severity : c.kind === 'multi' ? 8 + 24 * severity : 10 + 18 * severity;
-    const outPhase = smoothstep((t - 0.35) / 0.25) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15));
-    const outflow = isBow ? 0 : outMax * outPhase - 4 * (t < 0.35 ? s.strength : 0);
+    const outNow = outflowWind(c);
+    const outflow = isBow ? 0 : outNow - 4 * (t < 0.35 ? s.strength : 0);
     // ...and the outflow surges forward with the storm, over a broad area.
-    const surge = isBow ? 0 : outMax * outPhase * 0.7;
+    const surge = outNow * 0.7;
     const ro = b * 1.2;
     // Mesocyclone: a broad circulation, with strong winds well away from its centre.
     const mesoRc = 4.5;
@@ -147,7 +145,7 @@ export class Fields {
       : c.kind === 'single' || c.peakDbz < 50
         ? 0
         : smoothstep((t - 0.45) / 0.15);
-    const gustR = isBow ? 2.5 + 3.5 * smoothstep((t - 0.25) / 0.5) : b * (1.4 + 1.8 * smoothstep((t - 0.4) / 0.5));
+    const gustR = isBow ? 2.5 + 3.5 * smoothstep((t - 0.25) / 0.5) : b * (1.15 + 0.6 * smoothstep((t - 0.4) / 0.5));
     // Bows: how far back the trailing rain shield reaches (it grows as the system matures).
     const shieldDepth = 25 + 45 * smoothstep((t - 0.1) / 0.5);
     const shieldStr = smoothstep((t - 0.05) / 0.35);
@@ -272,7 +270,7 @@ export class Fields {
           // Gust front hugging the leading edge.
           if (gustOn > 0 && Math.abs(vn) < 1.05) {
             const gd = (dl - gustR * (1 + (n1 - 0.5) * 0.3)) / 0.9;
-            const dbzG = 18 * gustOn - 10 * gd * gd + (n3 - 0.5) * 12 - Math.max(0, Math.abs(vn) - 0.85) * 150;
+            const dbzG = 18 * gustOn - 10 * gd * gd + (n3 - 0.5) * 12 - Math.max(0, Math.abs(vn) - 0.85) * 150 - fineLineFade(x, y);
             if (dbzG > 0) zAdd += zOf(dbzG);
           }
 
@@ -346,7 +344,8 @@ export class Fields {
             const cosA = u0 / r;
             if (cosA > 0) {
               const gd = (r - gustR * (1 + (n1 - 0.5) * 0.25)) / 1.1;
-              const dbzG = 13 * gustOn - 9 * gd * gd + (n3 - 0.5) * 14 - (1 - smoothstep((cosA - 0.35) / 0.4)) * 30;
+              const dbzG =
+                9 * gustOn - 9 * gd * gd + (n3 - 0.5) * 14 - (1 - smoothstep((cosA - 0.45) / 0.4)) * 30 - fineLineFade(x, y);
               if (dbzG > 0) zAdd += zOf(dbzG);
             }
           }
@@ -417,6 +416,14 @@ export class Fields {
       }
     }
   }
+}
+
+/**
+ * Gust-front fine lines are shallow, so the radar beam (which climbs with distance)
+ * only sees them fairly close to the radar. Returns dB to subtract.
+ */
+function fineLineFade(x: number, y: number): number {
+  return Math.max(0, Math.hypot(x, y) - 70) * 0.25;
 }
 
 /** Spacing of the storm cores along a bow echo's line, km. */

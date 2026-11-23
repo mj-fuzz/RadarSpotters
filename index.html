@@ -28,6 +28,10 @@
         <button data-speed="120">120×</button>
         <button data-speed="240">240×</button>
       </div>
+      <div class="group warns">
+        <button data-warn="svr" class="warn-svr" title="Draw a Severe Thunderstorm warning (W)">⚠ SVR</button>
+        <button data-warn="tor" class="warn-tor" title="Draw a Tornado warning (T)">🌪 TOR</button>
+      </div>
       <div class="group">
         <select id="day" title="What kind of weather day?"></select>
         <button id="newday" title="New day (N)">New day</button>
@@ -36,6 +40,9 @@
     </header>
 
     <div class="info" id="info"></div>
+    <div class="score" id="score"></div>
+    <div class="toasts" id="toasts"></div>
+    <div class="hint hidden" id="hint"></div>
 
     <footer class="bottom">
       <div class="legend" id="legend">
@@ -57,9 +64,13 @@
         <p>Things to hunt for: <b>hook echoes</b> (the back of a supercell curling around its spin),
           <b>bow echoes</b> (a line bulging forward — damaging winds!), and thin <b>gust fronts</b> racing out ahead of strong storms.
           The radar takes a new scan every 4 game minutes.</p>
+        <p><b>Warnings!</b> Press <b>⚠ SVR</b> (or <kbd>W</kbd>) for a Severe Thunderstorm warning or <b>🌪 TOR</b> (<kbd>T</kbd>) for a Tornado
+          warning, then press on the storm and drag the way it's moving. Storm reports (hail ◆, wind ■, tornado ▼) pop up as storms
+          do damage. Reports inside your warning score points (more for lead time and a tight box). Reports outside are misses, and a
+          warning with no reports is a false alarm. Warnings only last 20–30 game minutes, so keep up!</p>
         <p class="keys">
           <kbd>Space</kbd> pause · <kbd>+</kbd>/<kbd>−</kbd> speed · <kbd>N</kbd> new day · drag to pan · scroll/pinch to zoom ·
-          <kbd>0</kbd> reset view · <kbd>S</kbd> smooth/blocky · <kbd>D</kbd> storm-spotter cheat mode
+          <kbd>0</kbd> reset view · <kbd>Esc</kbd> cancel warning · <kbd>S</kbd> smooth/blocky · <kbd>D</kbd> storm-spotter cheat mode
         </p>
         <p class="dim">Tap anywhere to close.</p>
       </div>

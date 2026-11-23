@@ -13,6 +13,11 @@ the map — with the clock cranked way up so it gets frantic.
 | `2` | **VEL** – Velocity | Wind. Green blows *toward* the radar, red *away*. Bright green touching bright red = rotation (tornado x-ray!) |
 | `3` | **ET** – Echo Tops | How tall the storm is, in thousands of feet |
 
+**Warnings:** press `W` (or ⚠ SVR) for a Severe Thunderstorm warning or `T` (or 🌪 TOR) for a Tornado
+warning, then press on the storm and drag the way it's moving. Storm reports (hail ◆, wind ■, tornado ▼)
+pop up as storms do damage: reports inside your warning score points (bonus for lead time and a tight
+box), reports outside are misses, and warnings with no reports are false alarms.
+
 Other controls: `Space` pause · `+`/`-` speed · `N` new day · drag to pan · scroll/pinch to zoom ·
 `0` reset view · `S` smooth/blocky pixels · `D` cheat mode (shows every storm's type, stage, and path) · `H` help.
 
@@ -35,6 +40,7 @@ Android builds can come later by wrapping the same code with Tauri.
 - `src/sim/fields.ts` — turns the storm list into reflectivity, wind, and echo-top grids
   (ragged edges, trailing rain, hook echoes, mesocyclones, outflow, debris balls).
 - `src/radar/scope.ts` — the rotating radar beam that samples those grids, plus coloring.
+- `src/game/warnings.ts` — the warning game: cones, storm reports, scoring.
 - `src/map/geography.ts` — made-up counties, towns, highways, and a river state line.
 
 ## Roadmap
@@ -44,7 +50,7 @@ Android builds can come later by wrapping the same code with Tauri.
 - [x] Supercells with hook echoes, cycling mesocyclones, tornadoes and debris balls
 - [x] Bow echoes (with bookend comma heads and rear-inflow jets), gust fronts, a Derecho day
 - [x] Scan-by-scan radar updates (a new volume scan every 4 game minutes)
-- [ ] Draw warning polygons (cones along storm motion) and get scored
+- [x] Draw SVR / TOR warning cones along storm motion and get scored against storm reports
 - [ ] Spot storm cells / tornado cells modes
 - [ ] Flash flooding, lightning & the power grid
 - [ ] Scenarios: derecho, hurricane, microbursts, snow / sleet / freezing rain, traffic reports
