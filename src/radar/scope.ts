@@ -77,11 +77,12 @@ export class Scope {
 
   /** Rotate the beam by `deg` degrees, sampling everything it passes. */
   sweep(deg: number, f: Fields, w: Weather): void {
+    if (!(deg > 0)) return; // ignore zero, negative or NaN steps
     const a0 = Math.floor((this.azimuth / 360) * BUCKETS);
     const a1 = Math.floor(((this.azimuth + deg) / 360) * BUCKETS);
     const count = Math.min(BUCKETS, a1 - a0);
     for (let n = 1; n <= count; n++) this.sampleBucket(this.buckets[(a0 + n) % BUCKETS], f, w);
-    this.azimuth = (this.azimuth + deg) % 360;
+    this.azimuth = (((this.azimuth + deg) % 360) + 360) % 360;
   }
 
   private sampleBucket(b: Int32Array, f: Fields, w: Weather): void {

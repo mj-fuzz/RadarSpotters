@@ -60,7 +60,7 @@ export class Fields {
     const s = cellShape(c);
     const noise = this.noise;
     const { a, b, dirX, dirY, rightX, rightY, peak, strat, meso, mesoX, mesoY, topNow, t } = s;
-    const ext = a * 4 + 8;
+    const ext = a * 5 + 10;
     const i0 = Math.max(0, Math.floor((c.x - ext + RANGE_KM) / KM_PER_PX));
     const i1 = Math.min(GRID - 1, Math.ceil((c.x + ext + RANGE_KM) / KM_PER_PX));
     const j0 = Math.max(0, Math.floor((RANGE_KM - (c.y + ext)) / KM_PER_PX));
@@ -111,7 +111,7 @@ export class Fields {
         const n1 = noise.sample(dx * 0.32 + c.seedX + evolve, dy * 0.32 + c.seedY);
         const n2 = noise.sample(dx * 0.85 + c.seedY - evolve * 1.3, dy * 0.85 + c.seedX);
         const n3 = noise.sample(dx * 2.2 + c.seedX * 1.7 + evolve * 2.2, dy * 2.2 - c.seedY);
-        const warp = 1 + (n1 - 0.5) * 1.5 + (n3 - 0.5) * 0.45;
+        const warp = Math.max(0.65, 1 + (n1 - 0.5) * 1.5 + (n3 - 0.5) * 0.45);
 
         let zAdd = 0;
 
@@ -132,7 +132,7 @@ export class Fields {
         let d2s = 99;
         if (strat > 0.02) {
           const su = u + 1.4 * a;
-          const sw = 1 + (n2 - 0.5) * 0.9;
+          const sw = Math.max(0.7, 1 + (n2 - 0.5) * 0.9);
           d2s = ((su * su) / (stratA * stratA) + (v * v) / (stratB * stratB)) * sw * sw;
           const dbzS = stratPeak - 20 * d2s + (n1 - 0.5) * 12;
           if (dbzS > 0) zAdd += zOf(dbzS);
@@ -180,7 +180,9 @@ export class Fields {
           if (torV > 45 && tr < 2) zAdd += zOf(50 + (torV - 45) * 0.4 - tr * 6);
         }
 
-        if (zAdd > 0) this.z[idx] += zAdd;
+        // Fade out softly before the edge of this cell's drawing box (no straight cut-off edges).
+        const edge = 1 - Math.max(Math.abs(dx), Math.abs(dy)) / ext;
+        if (zAdd > 0) this.z[idx] += edge < 0.2 ? zAdd * smoothstep(edge / 0.2) : zAdd;
 
         // Echo tops.
         const dTop = Math.sqrt(d2) / 1.2;

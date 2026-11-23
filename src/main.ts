@@ -516,7 +516,8 @@ let last = performance.now();
 let dirty = true;
 
 function frame(now: number): void {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // The first animation timestamp can be slightly earlier than `last`, so never let time run backwards.
+  const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
   last = now;
 
   if (!paused) {
