@@ -539,7 +539,8 @@ export class Weather {
     } else {
       // Bow echo: a fast-moving line that bulges out where the wind is strongest.
       radius = r.range(8, 11);
-      bowLen = r.range(35, 70);
+      // Some become long squall lines hundreds of km long; the rest stay compact bows.
+      bowLen = r.chance(0.4) ? r.range(90, 170) : r.range(35, 70);
       peakDbz = r.range(50, 60);
       top = r.range(42, 54);
       life = r.range(120, 220);
@@ -568,7 +569,7 @@ export class Weather {
       mesoPhase: r.range(0, Math.PI * 2),
       tornado: null,
       bowLen,
-      bowMax: kind === 'bow' ? r.range(0.2, 0.9) : 0,
+      bowMax: kind === 'bow' ? (bowLen > 85 ? r.range(0.08, 0.22) : r.range(0.2, 0.9)) : 0,
       parts,
       partTimer: r.range(1, 5),
       childTimer: this.childDelay(kind),

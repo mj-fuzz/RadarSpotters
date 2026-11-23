@@ -121,13 +121,25 @@ export class Fields {
     const deathZ = Math.exp(-deathDb * LN10_10);
     const deathTop = 1 - smoothstep((t - 0.8) / 0.2);
 
-    // Outflow: inflow while growing, pushing out once the downdraft takes over.
-    const outflow = isBow
-      ? 0
-      : (c.kind === 'single' ? 6 : 10) * smoothstep((t - 0.35) / 0.3) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15)) -
-        4 * (t < 0.35 ? s.strength : 0);
-    const ro = b * 0.9;
-    const mesoRc = 3;
+    // Outflow: inflow while growing, then the downdraft hits the ground and spreads out.
+    // Strong storms (high dBZ) blow out much harder: severe thunderstorm winds are
+    // far more common than tornadoes. m/s (x2 for knots).
+    const severity = smoothstep((c.peakDbz - 45) / 17);
+    const outMax = c.kind === 'single' ? 5 + 9 * severity : c.kind === 'multi' ? 8 + 24 * severity : 10 + 18 * severity;
+    const outPhase = smoothstep((t - 0.35) / 0.25) * (1 - 0.5 * smoothstep((t - 0.85) / 0.15));
+    const outflow = isBow ? 0 : outMax * outPhase - 4 * (t < 0.35 ? s.strength : 0);
+    // ...and the outflow surges forward with the storm, over a broad area.
+    const surge = isBow ? 0 : outMax * outPhase * 0.7;
+    const ro = b * 1.2;
+    // Mesocyclone: a broad circulation, with strong winds well away from its centre.
+    const mesoRc = 4.5;
+    const mesoFrac = c.rot > 0 ? meso / c.rot : 0;
+    // Rear-flank downdraft: a surge of wind wrapping around the back of the meso.
+    const rfdX = mesoX - dirX * 0.4 * a + rightX * 0.3 * b;
+    const rfdY = mesoY - dirY * 0.4 * a + rightY * 0.3 * b;
+    const rfdDirX = (dirX + rightX) * Math.SQRT1_2;
+    const rfdDirY = (dirY + rightY) * Math.SQRT1_2;
+    const rfdV = 30 * mesoFrac * smoothstep((t - 0.25) / 0.15);
 
     // Gust front: a thin line of light echo racing out ahead of strong storms.
     const gustOn = isBow
@@ -197,7 +209,9 @@ export class Fields {
           // The line bulges forward in the middle; past the ends it just carries on straight.
           const vc = Math.max(-1, Math.min(1, vn));
           // The leading edge wobbles: bulges where cores surge ahead, dents in between.
-          const wobble = (noise.sample(v * 0.35 + c.seedY, c.seedX + evolve * 0.25) - 0.5) * 14 + (n1 - 0.5) * 4;
+          // Long squall lines get several bows and wiggles along their length.
+          const wobble =
+            (noise.sample(v * 0.35 + c.seedY, c.seedX + evolve * 0.25) - 0.5) * 14 * Math.max(1, L / 50) + (n1 - 0.5) * 4;
           const front = A * L * 1.2 * (1 - vc * vc) - A * L * 0.6 + wobble;
           const dl = u - front; // + ahead of the line, - behind it
           const endF = 1 - smoothstep((Math.abs(vn) - (vn < 0 ? 0.85 : 0.95)) / 0.3);
@@ -264,11 +278,13 @@ export class Fields {
 
           // Damaging straight-line winds: the rear-inflow jet comes down and surges out
           // along the whole leading edge, strongest behind the apex.
-          const jb = (dl + 4) / 9;
-          const jv = vn / 0.85;
-          const ja = (dl - gustR) / 2.5;
+          // It's BROAD: a huge sheet of damaging wind behind the line, gusty and patchy.
+          const jb = (dl + 14) / 20;
+          const jv2 = (vn / 1.0) * (vn / 1.0);
+          const ja = (dl - gustR) / 3;
+          const gusty = 0.55 + 0.9 * n1;
           jetU =
-            44 * s.strength * (0.4 + A) * Math.exp(-jb * jb) * Math.exp(-jv * jv) * (dl > gustR ? Math.exp(-ja * ja) : 1) * endF;
+            (22 + 30 * A) * s.strength * gusty * Math.exp(-jb * jb) * Math.exp(-jv2 * jv2) * (dl > gustR ? Math.exp(-ja * ja) : 1) * endF;
         } else {
           // ---- Cells built from parts -----------------------------------------
           for (let k = 0; k < c.parts.length; k++) {
@@ -366,18 +382,29 @@ export class Fields {
         const r = Math.hypot(rdx, rdy) + 1e-3;
         const q = r / ro;
         if (outflow !== 0 && q < 3.5) {
-          const rad = outflow * q * Math.exp(0.5 * (1 - q * q)) * fade;
+          const gust = 0.65 + 0.7 * n2;
+          const rad = outflow * q * Math.exp(0.5 * (1 - q * q)) * fade * gust;
           wu += (rad * rdx) / r;
           wv += (rad * rdy) / r;
+          const sq = q * 0.75;
+          const fwd = surge * Math.exp(-sq * sq) * fade * gust;
+          wu += fwd * dirX;
+          wv += fwd * dirY;
         }
         if (meso > 0) {
           const mdx = x - mesoX;
           const mdy = y - mesoY;
           const mr = Math.hypot(mdx, mdy);
-          if (mr < mesoRc * 5) {
-            const vt = rankine(mr, mesoRc, meso, 4);
+          if (mr < mesoRc * 8) {
+            const vt = rankine(mr, mesoRc, meso, 6) * fade;
             wu += (-vt * mdy) / (mr + 1e-3);
             wv += (vt * mdx) / (mr + 1e-3);
+          }
+          if (rfdV > 0) {
+            const rq = Math.hypot(x - rfdX, y - rfdY) / (0.8 * b);
+            const rf = rfdV * Math.exp(-rq * rq) * fade * (0.7 + 0.6 * n2);
+            wu += rf * rfdDirX;
+            wv += rf * rfdDirY;
           }
         }
         if (tor && tr < 4) {
