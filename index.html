@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0a0e13" />
+    <meta name="description" content="Watch the radar, spot the storms, draw the warnings." />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>Radar Spotters</title>
+  </head>
+  <body>
+    <canvas id="scope"></canvas>
+
+    <header class="bar">
+      <div class="brand">RADAR <span>SPOTTERS</span></div>
+      <div class="group modes">
+        <button data-mode="ref" title="Reflectivity (1)">REF</button>
+        <button data-mode="vel" title="Velocity (2)">VEL</button>
+        <button data-mode="et" title="Echo Tops (3)">ET</button>
+      </div>
+      <div class="clock" id="clock">14:00</div>
+      <div class="group speeds">
+        <button data-speed="0" title="Pause (space)">❚❚</button>
+        <button data-speed="30">30×</button>
+        <button data-speed="60">60×</button>
+        <button data-speed="120">120×</button>
+        <button data-speed="240">240×</button>
+      </div>
+      <div class="group">
+        <select id="day" title="What kind of weather day?"></select>
+        <button id="newday" title="New day (N)">New day</button>
+        <button id="help-btn" title="Help (H)">?</button>
+      </div>
+    </header>
+
+    <div class="info" id="info"></div>
+
+    <footer class="bottom">
+      <div class="legend" id="legend">
+        <canvas id="legend-bar"></canvas>
+        <div class="legend-labels" id="legend-labels"></div>
+      </div>
+      <div class="readout" id="readout"></div>
+    </footer>
+
+    <div class="help hidden" id="help">
+      <div class="card">
+        <h2>Radar Spotters</h2>
+        <p>Storms pop up, grow, and fall apart while the wind pushes them across the map. Watch them on three radar products:</p>
+        <ul>
+          <li><b>REF</b> (1) — how much rain and hail. Green is light, red is heavy, pink and purple means hail.</li>
+          <li><b>VEL</b> (2) — wind. Green blows <i>toward</i> the radar, red blows <i>away</i>. Bright green right next to bright red = rotation. Tornado alert!</li>
+          <li><b>ET</b> (3) — echo tops: how tall the storm is. Over 50,000 ft is a monster.</li>
+        </ul>
+        <p class="keys">
+          <kbd>Space</kbd> pause · <kbd>+</kbd>/<kbd>−</kbd> speed · <kbd>N</kbd> new day · drag to pan · scroll/pinch to zoom ·
+          <kbd>0</kbd> reset view · <kbd>S</kbd> smooth/blocky · <kbd>D</kbd> storm-spotter cheat mode
+        </p>
+        <p class="dim">Tap anywhere to close.</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

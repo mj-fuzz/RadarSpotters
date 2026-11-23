@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local-only privacy blocklist (names, words that must never be committed). Never commit this.
+.privacy-blocklist
