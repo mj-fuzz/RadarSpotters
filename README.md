@@ -30,7 +30,7 @@ Android builds can come later by wrapping the same code with Tauri.
 
 ## How the weather works
 
-- `src/sim/weather.ts` — the storm engine: storm cells (single, multicell, supercell), their life
+- `src/sim/weather.ts` — the storm engine: storm cells (single, multicell, supercell, bow echo), their life
   cycle, steering winds, boundaries where new storms fire, gust-front "child" storms, tornadoes.
 - `src/sim/fields.ts` — turns the storm list into reflectivity, wind, and echo-top grids
   (ragged edges, trailing rain, hook echoes, mesocyclones, outflow, debris balls).
@@ -41,6 +41,9 @@ Android builds can come later by wrapping the same code with Tauri.
 
 - [x] Storms that form, drift, grow, and dissipate
 - [x] Reflectivity, velocity, and echo-top views
+- [x] Supercells with hook echoes, cycling mesocyclones, tornadoes and debris balls
+- [x] Bow echoes (with bookend comma heads and rear-inflow jets), gust fronts, a Derecho day
+- [x] Scan-by-scan radar updates (a new volume scan every 4 game minutes)
 - [ ] Draw warning polygons (cones along storm motion) and get scored
 - [ ] Spot storm cells / tornado cells modes
 - [ ] Flash flooding, lightning & the power grid

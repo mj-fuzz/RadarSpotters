@@ -29,10 +29,26 @@ function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
 }
 
+/** A new radar volume scan every this many game minutes (real radars: about 4-5). */
+const SCAN_MINUTES = 4;
+let nextScan = 0;
+
+/** Scan the atmosphere now; the beam then sweeps the new picture in. */
+function takeScan(): void {
+  fields.compute(weather);
+  scope.startScan(fields, weather, weather.time);
+  nextScan = (Math.floor(weather.time / SCAN_MINUTES) + 1) * SCAN_MINUTES;
+}
+
 function newDay(): void {
   weather.reset(randomSeed(), dayKey);
-  fields.compute(weather);
-  scope.fullScan(fields, weather);
+  takeScan();
+  scope.finishReveal();
+}
+
+function clockText(gameMinutes: number): string {
+  const total = START_MINUTES + Math.floor(gameMinutes);
+  return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +125,7 @@ function draw(): void {
   strokeLine(geo.stateLine);
 
   drawRings();
-  drawSweep();
+  if (scope.revealing) drawSweep();
   drawTowns();
   if (debug) drawDebug();
 
@@ -118,7 +134,7 @@ function draw(): void {
   ctx.fillStyle = 'rgba(140,220,255,0.9)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  const label = `${RADAR_ID}  ${MODES[mode].product}`;
+  const label = `${RADAR_ID}  ${MODES[mode].product}  ·  scan ${clockText(scope.scanTime)}`;
   ctx.fillText(label, 12 * dpr, H - 26 * dpr - legendHeight() * dpr);
 }
 
@@ -225,10 +241,11 @@ function drawDebug(): void {
     const x = sx(c.x);
     const y = sy(c.y);
     const stage = s.t < 0.28 ? 'growing' : s.t < 0.65 ? 'mature' : 'dying';
-    ctx.strokeStyle = c.kind === 'super' ? '#ff6bd6' : c.kind === 'multi' ? '#ffd36b' : '#9be7ff';
+    ctx.strokeStyle =
+      c.kind === 'super' ? '#ff6bd6' : c.kind === 'bow' ? '#ff9f43' : c.kind === 'multi' ? '#ffd36b' : '#9be7ff';
     ctx.lineWidth = 1 * dpr;
     ctx.beginPath();
-    ctx.arc(x, y, s.b * view.scale, 0, Math.PI * 2);
+    ctx.arc(x, y, (c.kind === 'bow' ? s.bowL : s.b) * view.scale, 0, Math.PI * 2);
     ctx.stroke();
     // 30-minute motion arrow.
     ctx.beginPath();
@@ -356,10 +373,7 @@ function mix(a: string, b: string, f: number): string {
 
 let lastClock = '';
 function updateHud(): void {
-  const total = START_MINUTES + Math.floor(weather.time);
-  const hh = String(Math.floor(total / 60) % 24).padStart(2, '0');
-  const mm = String(total % 60).padStart(2, '0');
-  const txt = `${hh}:${mm}`;
+  const txt = clockText(weather.time);
   if (txt !== lastClock) {
     lastClock = txt;
     clockEl.textContent = txt;
@@ -513,24 +527,21 @@ window.addEventListener('keydown', (e) => {
 // Main loop
 // ---------------------------------------------------------------------------
 let last = performance.now();
-let dirty = true;
 
 function frame(now: number): void {
   // The first animation timestamp can be slightly earlier than `last`, so never let time run backwards.
   const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
   last = now;
 
-  if (!paused) {
-    weather.update((dt * speed) / 60);
-    dirty = true;
+  if (!paused) weather.update((dt * speed) / 60);
+  if (weather.time >= nextScan) {
+    scope.finishReveal(); // never leave a half-revealed scan behind
+    takeScan();
   }
-  if (dirty) {
-    fields.compute(weather);
-    dirty = false;
-  }
-  // One full scan every ~4 game minutes, but never too fast or too slow to watch.
-  const period = paused ? 4 : Math.min(6, Math.max(1.2, 240 / speed));
-  scope.sweep((360 * dt) / period, fields, weather);
+  // The beam sweeps each new scan in quickly, then the picture holds until the next one.
+  const realSecondsPerScan = (SCAN_MINUTES * 60) / speed;
+  const sweepSeconds = Math.min(1.6, Math.max(0.5, realSecondsPerScan * 0.7));
+  scope.reveal((360 * dt) / sweepSeconds);
   scope.paint(mode);
 
   draw();
@@ -547,8 +558,8 @@ resize();
 resetView();
 setMode('ref');
 syncSpeedButtons();
-fields.compute(weather);
-scope.fullScan(fields, weather);
+takeScan();
+scope.finishReveal();
 requestAnimationFrame(frame);
 
 // Offline / installable app support (production builds only).

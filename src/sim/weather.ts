@@ -4,9 +4,15 @@ import { Rng } from './rng';
  * The storm engine. Storm cells are born, grow, mature, and fall apart while
  * the steering winds push them across the map. All times are in GAME minutes,
  * all distances in kilometres. x points east, y points north, the radar sits at (0, 0).
+ *
+ * Storm types:
+ *  - single: a lone pop-up shower or thunderstorm
+ *  - multi:  a cluster; new updrafts ("parts") keep bubbling up on its leading flank
+ *  - super:  a rotating supercell with a mesocyclone, hook echo, and maybe a tornado
+ *  - bow:    a line of storms bowed out by a rush of wind (damaging straight-line winds)
  */
 
-export type CellKind = 'single' | 'multi' | 'super';
+export type CellKind = 'single' | 'multi' | 'super' | 'bow';
 
 export interface Tornado {
   age: number;
@@ -16,6 +22,23 @@ export interface Tornado {
   /** Wobble offset from the mesocyclone centre, km. */
   ox: number;
   oy: number;
+}
+
+/**
+ * One updraft/precipitation core inside a storm. Positions and size are in units
+ * of the storm's radius `b`, measured along (u) and to the right of (v) its motion.
+ */
+export interface Part {
+  u: number;
+  v: number;
+  r: number;
+  /** Strength relative to the storm's peak, dB. */
+  amp: number;
+  age: number;
+  /** Infinity = lives as long as the storm. */
+  life: number;
+  /** Drift relative to the storm, radius units per minute (old cells fall to the back). */
+  du: number;
 }
 
 export interface StormCell {
@@ -32,13 +55,20 @@ export interface StormCell {
   peakDbz: number;
   /** Core radius at maturity, km. */
   radius: number;
-  /** How stretched the core is along its motion. */
+  /** How stretched the main core is along its motion. */
   elong: number;
   /** Highest echo top the cell will reach, thousands of feet. */
   top: number;
   /** Mesocyclone strength in m/s (0 = no rotation). */
   rot: number;
+  /** Phase of the mesocyclone's strengthen/weaken cycle. */
+  mesoPhase: number;
   tornado: Tornado | null;
+  /** Bow echoes: half-length of the line, km. */
+  bowLen: number;
+  parts: Part[];
+  /** Minutes until the next new part bubbles up. */
+  partTimer: number;
   /** Minutes until this cell may trigger a neighbour on its gust front. */
   childTimer: number;
   /** Per-cell offsets into the noise texture so every cell looks different. */
@@ -56,8 +86,8 @@ export interface DayType {
   spawnPerMin: number;
   /** Chance per minute a mature cell kicks off a neighbour. */
   childPerMin: number;
-  /** Chance weights for single / multicell / supercell. */
-  mix: [number, number, number];
+  /** Chance weights for single / multicell / supercell / bow echo. */
+  mix: [number, number, number, number];
   /** Chance per minute a mature supercell drops a tornado. */
   tornadoPerMin: number;
   /** Steering wind speed range, km/h. */
@@ -67,10 +97,10 @@ export interface DayType {
 export const DAY_TYPES = {
   calm: {
     label: 'Pop-up showers',
-    targetCells: 9,
-    spawnPerMin: 0.35,
+    targetCells: 10,
+    spawnPerMin: 0.4,
     childPerMin: 0.05,
-    mix: [0.8, 0.2, 0],
+    mix: [0.75, 0.25, 0, 0],
     tornadoPerMin: 0,
     windKmh: [20, 35],
   },
@@ -79,18 +109,27 @@ export const DAY_TYPES = {
     targetCells: 18,
     spawnPerMin: 0.6,
     childPerMin: 0.09,
-    mix: [0.45, 0.4, 0.15],
+    mix: [0.4, 0.38, 0.16, 0.06],
     tornadoPerMin: 0.02,
     windKmh: [35, 55],
   },
   outbreak: {
     label: 'Outbreak!',
-    targetCells: 22,
-    spawnPerMin: 0.8,
-    childPerMin: 0.12,
-    mix: [0.25, 0.4, 0.35],
+    targetCells: 20,
+    spawnPerMin: 0.75,
+    childPerMin: 0.1,
+    mix: [0.25, 0.33, 0.36, 0.06],
     tornadoPerMin: 0.045,
     windKmh: [45, 70],
+  },
+  derecho: {
+    label: 'Derecho!',
+    targetCells: 14,
+    spawnPerMin: 0.5,
+    childPerMin: 0.1,
+    mix: [0.2, 0.42, 0.06, 0.32],
+    tornadoPerMin: 0.01,
+    windKmh: [60, 90],
   },
 } satisfies Record<string, DayType>;
 
@@ -120,6 +159,15 @@ export function envelope(t: number): number {
   if (t < 0.28) return smoothstep(t / 0.28);
   if (t < 0.65) return 1;
   return 1 - smoothstep((t - 0.65) / 0.35);
+}
+
+/** Life-cycle of a single part (quicker rise and fall). */
+export function partEnvelope(p: Part): number {
+  if (!Number.isFinite(p.life)) return 1;
+  const t = p.age / p.life;
+  if (t < 0.3) return smoothstep(t / 0.3);
+  if (t < 0.6) return 1;
+  return 1 - smoothstep((t - 0.6) / 0.4);
 }
 
 export class Weather {
@@ -227,19 +275,20 @@ export class Weather {
       c.y += c.vy * dt;
       const t = c.age / c.life;
 
+      this.updateParts(c, t, dt);
       if (c.kind === 'super') this.updateTornado(c, t, dt);
 
-      // Mature cells kick off new updrafts along their gust front.
+      // Mature cells kick off new storms along their gust front.
       if (t > 0.35 && t < 0.9) {
         c.childTimer -= dt;
         if (c.childTimer <= 0) {
-          c.childTimer = this.childDelay(c);
+          c.childTimer = this.childDelay(c.kind);
           if (this.cells.length + born.length < this.day.targetCells * 1.4) born.push(this.spawnChild(c));
         }
       }
     }
     this.cells = this.cells.filter(
-      (c) => c.age < c.life && Math.abs(c.x) < DOMAIN + 20 && Math.abs(c.y) < DOMAIN + 20,
+      (c) => c.age < c.life && Math.abs(c.x) < DOMAIN + 40 && Math.abs(c.y) < DOMAIN + 40,
     );
     this.cells.push(...born);
 
@@ -247,6 +296,48 @@ export class Weather {
     const deficit = Math.max(0, this.day.targetCells - this.cells.length) / this.day.targetCells;
     const rate = this.day.spawnPerMin * (0.3 + 2 * deficit);
     if (r.chance(rate * dt)) this.cells.push(this.spawnFresh());
+  }
+
+  /** Age the storm's parts and bubble up new ones. */
+  private updateParts(c: StormCell, t: number, dt: number): void {
+    const r = this.rng;
+    for (const p of c.parts) {
+      p.age += dt;
+      p.u += p.du * dt;
+    }
+    c.parts = c.parts.filter((p) => p.age < p.life);
+    if (t > 0.85) return;
+    c.partTimer -= dt;
+    if (c.partTimer > 0) return;
+
+    if (c.kind === 'multi') {
+      // New updrafts form on the forward / right flank, then slide to the back as they age.
+      c.parts.push({
+        u: r.range(0.2, 1.0),
+        v: r.range(-0.2, 1.1),
+        r: r.range(0.4, 0.7),
+        amp: r.range(-5, 2),
+        age: 0,
+        life: r.range(14, 30),
+        du: -r.range(0.015, 0.035),
+      });
+      c.partTimer = r.range(3, 8);
+    } else if (c.kind === 'super') {
+      // Little towers along the flanking line, trailing back from the meso.
+      const k = r.range(0, 1);
+      c.parts.push({
+        u: -0.7 - 1.3 * k,
+        v: 0.9 + 0.7 * k + r.range(-0.2, 0.2),
+        r: r.range(0.22, 0.38),
+        amp: r.range(-24, -12),
+        age: 0,
+        life: r.range(8, 16),
+        du: 0,
+      });
+      c.partTimer = r.range(3, 7);
+    } else {
+      c.partTimer = 999;
+    }
   }
 
   private updateTornado(c: StormCell, t: number, dt: number): void {
@@ -257,29 +348,36 @@ export class Weather {
       tor.ox = Math.max(-1.5, Math.min(1.5, tor.ox + r.gauss() * 0.15 * dt));
       tor.oy = Math.max(-1.5, Math.min(1.5, tor.oy + r.gauss() * 0.15 * dt));
       if (tor.age >= tor.life || t > 0.92) c.tornado = null;
-    } else if (t > 0.3 && t < 0.85 && r.chance(this.day.tornadoPerMin * dt * (c.rot / 28))) {
-      c.tornado = {
-        age: 0,
-        life: r.range(4, 16),
-        vmax: r.range(35, 80),
-        ox: r.range(-0.8, 0.8),
-        oy: r.range(-0.8, 0.8),
-      };
+    } else {
+      // Tornadoes like a strong, tightening mesocyclone.
+      const cycle = mesoCycle(c);
+      if (t > 0.3 && t < 0.85 && cycle > 0.75 && r.chance(this.day.tornadoPerMin * dt * (c.rot / 28) * 1.6)) {
+        c.tornado = {
+          age: 0,
+          life: r.range(4, 16),
+          vmax: r.range(35, 80),
+          ox: r.range(-0.8, 0.8),
+          oy: r.range(-0.8, 0.8),
+        };
+      }
     }
   }
 
-  private childDelay(c: StormCell): number {
-    const mult = c.kind === 'multi' ? 1.8 : c.kind === 'super' ? 1.2 : 0.6;
+  private childDelay(kind: CellKind): number {
+    const mult = kind === 'multi' ? 1.8 : kind === 'super' ? 1.2 : kind === 'bow' ? 1.5 : 0.6;
     const rate = this.day.childPerMin * mult;
     return -Math.log(Math.max(1e-6, this.rng.next())) / Math.max(1e-6, rate);
   }
 
   private pickKind(): CellKind {
-    const [s, m] = this.day.mix;
-    const x = this.rng.next() * (this.day.mix[0] + this.day.mix[1] + this.day.mix[2]);
-    if (x < s) return 'single';
-    if (x < s + m) return 'multi';
-    return 'super';
+    const m = this.day.mix;
+    let x = this.rng.next() * (m[0] + m[1] + m[2] + m[3]);
+    const kinds: CellKind[] = ['single', 'multi', 'super', 'bow'];
+    for (let k = 0; k < 4; k++) {
+      if (x < m[k]) return kinds[k];
+      x -= m[k];
+    }
+    return 'single';
   }
 
   private spawnFresh(): StormCell {
@@ -300,7 +398,10 @@ export class Weather {
         y = r.range(-DOMAIN, DOMAIN);
       } while ((x * this.windX + y * this.windY) / wl > r.range(-DOMAIN, DOMAIN * 1.4));
     }
-    return this.makeCell(this.pickKind(), x, y);
+    let kind = this.pickKind();
+    // Bows are big: only a couple at once.
+    if (kind === 'bow' && this.cells.filter((c) => c.kind === 'bow').length >= 2) kind = 'multi';
+    return this.makeCell(kind, x, y);
   }
 
   private spawnChild(p: StormCell): StormCell {
@@ -308,9 +409,13 @@ export class Weather {
     const sp = Math.hypot(p.vx, p.vy) || 1;
     const dx = p.vx / sp;
     const dy = p.vy / sp;
-    // New updrafts favour the forward / right flank (downshear).
-    const fwd = p.radius * r.range(0.6, 1.6);
-    const side = p.radius * r.range(-0.8, 1.4);
+    // New updrafts favour the forward / right flank (downshear), or the ends of a bow.
+    let fwd = p.radius * r.range(0.6, 1.6);
+    let side = p.radius * r.range(-0.8, 1.4);
+    if (p.kind === 'bow') {
+      fwd = r.range(-5, 5);
+      side = (r.chance(0.5) ? -1 : 1) * p.bowLen * r.range(0.9, 1.3);
+    }
     const x = p.x + dx * fwd + dy * side;
     const y = p.y + dy * fwd - dx * side;
     let kind: CellKind = r.chance(0.55) ? 'single' : 'multi';
@@ -327,22 +432,42 @@ export class Weather {
     let top: number;
     let life: number;
     let rot = 0;
+    let bowLen = 0;
+    let elong = r.range(1.05, 1.5);
+    const parts: Part[] = [];
     if (kind === 'single') {
       radius = r.range(4.5, 8);
       peakDbz = r.range(40, 56);
       top = r.range(24, 40);
       life = r.range(22, 42);
+      parts.push({ u: 0, v: 0, r: 1, amp: 0, age: 0, life: Infinity, du: 0 });
+      if (r.chance(0.5)) {
+        parts.push({ u: r.range(-0.8, 0.8), v: r.range(-0.8, 0.8), r: r.range(0.35, 0.6), amp: r.range(-10, -3), age: 0, life: Infinity, du: 0 });
+      }
     } else if (kind === 'multi') {
       radius = r.range(7, 12);
       peakDbz = r.range(48, 62);
       top = r.range(34, 50);
-      life = r.range(35, 70);
-    } else {
-      radius = r.range(9, 14);
+      life = r.range(40, 80);
+      for (let k = 0; k < 4; k++) {
+        const pl = r.range(14, 30);
+        parts.push({
+          u: r.range(-0.8, 0.8),
+          v: r.range(-0.8, 0.8),
+          r: r.range(0.4, 0.75),
+          amp: r.range(-5, 2),
+          age: r.range(0, pl * 0.6),
+          life: pl,
+          du: -r.range(0.015, 0.035),
+        });
+      }
+    } else if (kind === 'super') {
+      radius = r.range(11, 16);
       peakDbz = r.range(58, 72);
       top = r.range(45, 63);
       life = r.range(80, 160);
-      rot = r.range(16, 34);
+      rot = r.range(18, 36);
+      parts.push({ u: 0.15, v: -0.1, r: 1, amp: 0, age: 0, life: Infinity, du: 0 });
       // Supercells turn right of the mean wind and slow down a bit ("right movers").
       const turn = -r.range(0.35, 0.6);
       const sp = r.range(0.7, 0.85);
@@ -350,6 +475,17 @@ export class Weather {
       const cy = vx * Math.sin(turn) + vy * Math.cos(turn);
       vx = cx * sp;
       vy = cy * sp;
+    } else {
+      // Bow echo: a fast-moving line that bulges out where the wind is strongest.
+      radius = r.range(8, 11);
+      bowLen = r.range(30, 60);
+      peakDbz = r.range(52, 62);
+      top = r.range(42, 54);
+      life = r.range(100, 180);
+      elong = 1;
+      const sp = r.range(1.15, 1.35);
+      vx *= sp;
+      vy *= sp;
     }
     // A little individual wobble in motion.
     vx += r.gauss() * 0.05;
@@ -365,16 +501,26 @@ export class Weather {
       life,
       peakDbz,
       radius,
-      elong: r.range(1.05, 1.5),
+      elong,
       top,
       rot,
+      mesoPhase: r.range(0, Math.PI * 2),
       tornado: null,
-      childTimer: this.childDelay({ kind } as StormCell),
+      bowLen,
+      parts,
+      partTimer: r.range(1, 5),
+      childTimer: this.childDelay(kind),
       seedX: r.range(0, 256),
       seedY: r.range(0, 256),
       phase: r.range(0, Math.PI * 2),
     };
   }
+}
+
+/** Mesocyclones strengthen and weaken in cycles: 0.35 (weak) .. 1 (strong and tight). */
+export function mesoCycle(c: StormCell): number {
+  const s = Math.sin(c.age * 0.16 + c.mesoPhase);
+  return 0.35 + 0.65 * (0.5 + 0.5 * s);
 }
 
 /** Shared geometry for a cell at its current moment. Used by the field renderer and debug overlay. */
@@ -398,6 +544,9 @@ export interface CellShape {
   mesoY: number;
   /** Echo top right now, kft. */
   topNow: number;
+  /** Bow echoes: current half-length (km) and how far the middle bulges (0..1). */
+  bowL: number;
+  bowAmt: number;
 }
 
 export function cellShape(c: StormCell): CellShape {
@@ -414,10 +563,13 @@ export function cellShape(c: StormCell): CellShape {
   const rightX = dirY;
   const rightY = -dirX;
   const strat = smoothstep((t - 0.3) / 0.6) * (c.kind === 'single' ? 0.55 : 1);
-  const meso = c.rot * smoothstep((t - 0.12) / 0.2) * (1 - smoothstep((t - 0.82) / 0.15));
+  const meso =
+    c.rot * smoothstep((t - 0.12) / 0.2) * (1 - smoothstep((t - 0.82) / 0.15)) * (c.kind === 'super' ? mesoCycle(c) : 1);
   // Mesocyclone sits on the rear-right flank, at the edge of the core (where the hook forms).
   const mesoX = c.x - dirX * 0.55 * a + rightX * 0.85 * b;
   const mesoY = c.y - dirY * 0.55 * a + rightY * 0.85 * b;
   const topNow = 12 + (c.top - 12) * Math.pow(e, 0.6);
-  return { t, strength: e, peak, a, b, dirX, dirY, rightX, rightY, strat, meso, mesoX, mesoY, topNow };
+  const bowL = c.bowLen * (0.6 + 0.4 * Math.sqrt(e));
+  const bowAmt = 0.05 + 0.45 * smoothstep((t - 0.15) / 0.45);
+  return { t, strength: e, peak, a, b, dirX, dirY, rightX, rightY, strat, meso, mesoX, mesoY, topNow, bowL, bowAmt };
 }

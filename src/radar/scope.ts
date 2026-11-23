@@ -15,8 +15,8 @@ const NO_ECHO = -99;
 const MS_TO_KT = 1.94384;
 
 /**
- * What the player sees. Holds the last sampled value for every pixel and only
- * refreshes the pixels the rotating beam has just swept over, like a real radar.
+ * What the player sees. Holds the last complete volume scan; a new one is taken
+ * every few game minutes and revealed by the rotating beam.
  */
 export class Scope {
   readonly dbz = new Float32Array(GRID * GRID).fill(NO_ECHO);
@@ -25,8 +25,18 @@ export class Scope {
   /** Echo tops, kft (0 = none). */
   readonly tops = new Float32Array(GRID * GRID);
 
-  /** Beam azimuth, degrees clockwise from north. */
+  /** Beam azimuth while a new scan is being revealed, degrees clockwise from north. */
   azimuth = 0;
+  /** True while the beam is sweeping in a new scan. */
+  revealing = false;
+  /** Game time (minutes) of the scan on screen. */
+  scanTime = 0;
+
+  // The newest scan, waiting to be revealed by the beam.
+  private pDbz = new Float32Array(GRID * GRID).fill(NO_ECHO);
+  private pVel = new Float32Array(GRID * GRID).fill(NaN);
+  private pTop = new Float32Array(GRID * GRID);
+  private pendingTime = 0;
 
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -38,7 +48,7 @@ export class Scope {
   private ey = new Float32Array(GRID * GRID);
   private range = new Float32Array(GRID * GRID);
   private luts: Record<Mode, Uint32Array>;
-  private speckle = 0;
+  private seed = 12345;
 
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -70,51 +80,85 @@ export class Scope {
     this.inside = Int32Array.from(inside);
   }
 
-  /** Sample the whole scan at once (used when starting a new day). */
-  fullScan(f: Fields, w: Weather): void {
-    for (const b of this.buckets) this.sampleBucket(b, f, w);
-  }
-
-  /** Rotate the beam by `deg` degrees, sampling everything it passes. */
-  sweep(deg: number, f: Fields, w: Weather): void {
-    if (!(deg > 0)) return; // ignore zero, negative or NaN steps
-    const a0 = Math.floor((this.azimuth / 360) * BUCKETS);
-    const a1 = Math.floor(((this.azimuth + deg) / 360) * BUCKETS);
-    const count = Math.min(BUCKETS, a1 - a0);
-    for (let n = 1; n <= count; n++) this.sampleBucket(this.buckets[(a0 + n) % BUCKETS], f, w);
-    this.azimuth = (((this.azimuth + deg) % 360) + 360) % 360;
-  }
-
-  private sampleBucket(b: Int32Array, f: Fields, w: Weather): void {
+  /**
+   * Take a complete volume scan of the atmosphere right now. Like a real radar
+   * app, the new picture is then revealed by the sweeping beam; every pixel of a
+   * scan comes from the same moment, so storms never get torn or seamed.
+   */
+  startScan(f: Fields, w: Weather, gameTime: number): void {
     // Environmental wind in m/s; it gets stronger with height, and the beam climbs with range.
     const envU = w.windX * (1000 / 60);
     const envV = w.windY * (1000 / 60);
+    for (let k = 0; k < BUCKETS; k++) {
+      const b = this.buckets[k];
+      // Each radial gets a tiny calibration wobble, which gives real radar its faint streaks.
+      const radial = (this.rand() - 0.5) * 2.2;
+      for (let n = 0; n < b.length; n++) {
+        const idx = b[n];
+        const z = f.z[idx];
+        const r = this.range[idx];
+        let raw = z > 0 ? 10 * Math.log10(z) - r * 0.015 : NO_ECHO;
+        // Overlapping cores add up; squash the very top end so 75+ dBZ stays rare (giant hail!).
+        if (raw > 62) raw = 62 + (raw - 62) * 0.45;
+        const jitter = (this.rand() - 0.5) * 2;
+        // Weak echoes are grainy and patchy: some gates drop out entirely.
+        const dropout = raw < 20 && this.rand() < (20 - raw) / 40;
+        if (raw < 0 || dropout) {
+          this.pDbz[idx] = NO_ECHO;
+          this.pVel[idx] = NaN;
+          this.pTop[idx] = 0;
+          continue;
+        }
+        this.pDbz[idx] = raw + jitter * 2.6 + radial;
+        const isClutter = f.clutter[idx] > 0 && f.clutter[idx] >= z * 0.5;
+        if (isClutter) {
+          this.pVel[idx] = jitter * 2;
+        } else {
+          const kk = 0.7 + r / 350;
+          const vr = (envU * kk + f.u[idx]) * this.ex[idx] + (envV * kk + f.v[idx]) * this.ey[idx];
+          this.pVel[idx] = vr * MS_TO_KT + jitter * 3;
+        }
+        this.pTop[idx] = raw >= 18 && !isClutter ? f.top[idx] : 0;
+      }
+    }
+    this.pendingTime = gameTime;
+    this.azimuth = 0;
+    this.revealing = true;
+  }
+
+  /** Sweep the beam `deg` degrees further, revealing the newest scan behind it. */
+  reveal(deg: number): void {
+    if (!this.revealing || !(deg > 0)) return;
+    const a0 = Math.floor((this.azimuth / 360) * BUCKETS);
+    const end = Math.min(360, this.azimuth + deg);
+    const a1 = Math.min(BUCKETS, Math.floor((end / 360) * BUCKETS));
+    for (let k = a0; k < a1; k++) this.copyBucket(this.buckets[k]);
+    this.azimuth = end;
+    if (end >= 360) this.finishReveal();
+  }
+
+  /** Show the newest scan immediately. */
+  finishReveal(): void {
+    if (!this.revealing) return;
+    const a0 = Math.floor((this.azimuth / 360) * BUCKETS);
+    for (let k = a0; k < BUCKETS; k++) this.copyBucket(this.buckets[k]);
+    this.azimuth = 0;
+    this.revealing = false;
+    this.scanTime = this.pendingTime;
+  }
+
+  private copyBucket(b: Int32Array): void {
     for (let n = 0; n < b.length; n++) {
       const idx = b[n];
-      const z = f.z[idx];
-      const r = this.range[idx];
-      let raw = z > 0 ? 10 * Math.log10(z) - r * 0.015 : NO_ECHO;
-      // Overlapping cores add up; squash the very top end so 75+ dBZ stays rare (giant hail!).
-      if (raw > 62) raw = 62 + (raw - 62) * 0.45;
-      this.speckle = (this.speckle * 1103515245 + 12345) & 0x7fffffff;
-      const jitter = (this.speckle / 0x7fffffff - 0.5) * 2;
-      if (raw < 0) {
-        this.dbz[idx] = NO_ECHO;
-        this.vel[idx] = NaN;
-        this.tops[idx] = 0;
-        continue;
-      }
-      this.dbz[idx] = raw + jitter;
-      const isClutter = f.clutter[idx] > 0 && f.clutter[idx] >= z * 0.5;
-      if (isClutter) {
-        this.vel[idx] = jitter * 2;
-      } else {
-        const k = 0.7 + r / 350;
-        const vr = (envU * k + f.u[idx]) * this.ex[idx] + (envV * k + f.v[idx]) * this.ey[idx];
-        this.vel[idx] = vr * MS_TO_KT + jitter * 2.5;
-      }
-      this.tops[idx] = raw >= 18 && !isClutter ? f.top[idx] : 0;
+      this.dbz[idx] = this.pDbz[idx];
+      this.vel[idx] = this.pVel[idx];
+      this.tops[idx] = this.pTop[idx];
     }
+  }
+
+  private rand(): number {
+    this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff;
+    return this.seed / 0x7fffffff;
   }
 
   /** Paint the current product into the scope's offscreen canvas. */
