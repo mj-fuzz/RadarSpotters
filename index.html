@@ -31,6 +31,7 @@
       <div class="group">
         <select id="day" title="What kind of weather day?"></select>
         <button id="newday" title="New day (N)">New day</button>
+        <button id="endshift" title="End your shift and see the shift report (X)">🏁 End shift</button>
         <button id="mute" title="Sound on/off (M)">🔊</button>
         <button id="help-btn" title="Help (H)">?</button>
       </div>
@@ -73,6 +74,32 @@
       <div class="readout" id="readout"></div>
     </footer>
 
+    <div class="debrief hidden" id="debrief">
+      <div class="debrief-card">
+        <div class="debrief-head">
+          <div>
+            <div class="debrief-kicker" id="db-kicker">SHIFT OVER · 20:00</div>
+            <h2 id="db-rank"></h2>
+            <div class="debrief-score" id="db-score"></div>
+          </div>
+        </div>
+        <div class="debrief-body">
+          <div class="replay">
+            <canvas id="db-replay" width="420" height="420"></canvas>
+            <div class="replay-note">Your whole afternoon, sped up. Lines = your warnings, dots = reports (white ring = missed).</div>
+          </div>
+          <div class="debrief-stats">
+            <div class="stat-grid" id="db-grid"></div>
+            <ul class="highlights" id="db-highlights"></ul>
+          </div>
+        </div>
+        <div class="debrief-actions">
+          <button id="db-again" class="primary">▶ Next shift</button>
+          <button id="db-keep">Keep watching the radar</button>
+        </div>
+      </div>
+    </div>
+
     <div class="help hidden" id="help">
       <div class="card">
         <h2>Radar Spotters</h2>
@@ -95,7 +122,7 @@
           warning with no reports is a false alarm. Warnings only last 20–30 game minutes, so keep up!</p>
         <p class="keys">
           <kbd>Space</kbd> pause · <kbd>+</kbd>/<kbd>−</kbd> speed · <kbd>N</kbd> new day · drag to pan · scroll/pinch to zoom ·
-          <kbd>0</kbd> reset view · <kbd>Esc</kbd> cursor · <kbd>B</kbd> smooth/blocky · <kbd>M</kbd> mute · <kbd>D</kbd> storm-spotter cheat mode
+          <kbd>X</kbd> end shift · <kbd>0</kbd> reset view · <kbd>Esc</kbd> cursor · <kbd>B</kbd> smooth/blocky · <kbd>M</kbd> mute · <kbd>D</kbd> storm-spotter cheat mode
         </p>
         <p class="dim">Tap anywhere to close.</p>
       </div>

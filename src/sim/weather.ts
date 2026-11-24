@@ -185,6 +185,8 @@ export class Weather {
   day: DayType = DAY_TYPES.active;
   dayKey: DayKey = 'active';
   seed = 1;
+  /** 0..1: scales how often new storms fire (the game winds it down as the sun sets). */
+  activity = 1;
 
   private rng = new Rng(1);
   private boundaries: Boundary[] = [];
@@ -300,7 +302,7 @@ export class Weather {
     // Brand new storms. More likely when the sky is "under-stormed".
     const deficit = Math.max(0, this.day.targetCells - this.cells.length) / this.day.targetCells;
     const rate = this.day.spawnPerMin * (0.3 + 2 * deficit);
-    if (r.chance(rate * dt)) this.cells.push(...this.spawnFresh());
+    if (r.chance(rate * dt * this.activity)) this.cells.push(...this.spawnFresh());
   }
 
   /** Age the storm's parts and bubble up new ones. */
@@ -373,7 +375,7 @@ export class Weather {
 
   private childDelay(kind: CellKind): number {
     const mult = kind === 'multi' ? 1.8 : kind === 'super' ? 1.2 : kind === 'bow' ? 1.5 : 0.6;
-    const rate = this.day.childPerMin * mult;
+    const rate = this.day.childPerMin * mult * Math.max(0.05, this.activity);
     return -Math.log(Math.max(1e-6, this.rng.next())) / Math.max(1e-6, rate);
   }
 

@@ -438,6 +438,114 @@ kbd {
     background: rgba(200, 0, 0, 0.92);
   }
 }
+.debrief {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  overflow-y: auto;
+  animation: fade-in 0.6s ease-out;
+}
+.debrief.hidden {
+  display: none;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.debrief-card {
+  width: min(900px, 100%);
+  background: #0f1720;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.debrief-kicker {
+  font: 700 12px ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.15em;
+  color: var(--dim);
+}
+.debrief h2 {
+  margin: 4px 0 2px;
+  font-size: clamp(22px, 4vw, 32px);
+  color: var(--accent);
+}
+.debrief-score {
+  font: 700 18px ui-monospace, Menlo, Consolas, monospace;
+}
+.debrief-score .new {
+  color: #ffd84a;
+  margin-left: 8px;
+  animation: flash-label 0.8s step-end infinite;
+}
+.debrief-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 14px;
+}
+.replay {
+  flex: 0 1 420px;
+}
+.replay canvas {
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  display: block;
+}
+.replay-note {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+.debrief-stats {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+.stat {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.stat .v {
+  font: 800 20px ui-monospace, Menlo, Consolas, monospace;
+  color: #fff;
+}
+.stat .l {
+  font-size: 11px;
+  color: var(--dim);
+}
+.highlights {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.debrief-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+button.primary {
+  background: #0f3b52;
+  border-color: var(--accent);
+  color: #fff;
+  font-size: 15px;
+  padding: 10px 18px;
+}
 @media (max-width: 640px) {
   .brand {
     display: none;

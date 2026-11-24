@@ -1,12 +1,13 @@
 import './style.css';
 import { AlertSounds } from './audio/alerts';
+import { Replay, SHIFT_MINUTES, WIND_DOWN_MINUTES, loadBest, rankFor, saveBest } from './game/shift';
 import { KINDS, WarningGame, inside, reportText, type Warning, type WarningKind } from './game/warnings';
 import { Geography, RADAR_ID, compass, type Polyline } from './map/geography';
 import { MODES, Scope, type Mode } from './radar/scope';
 import { Fields, RANGE_KM } from './sim/fields';
 import { NoiseTex } from './sim/noise';
 import { Rng } from './sim/rng';
-import { DAY_TYPES, Weather, cellShape, type DayKey } from './sim/weather';
+import { DAY_TYPES, Weather, cellShape, smoothstep, type DayKey } from './sim/weather';
 
 // ---------------------------------------------------------------------------
 // World setup
@@ -55,8 +56,12 @@ function takeScan(): void {
 }
 
 function newDay(): void {
+  weather.activity = 1;
   weather.reset(randomSeed(), dayKey);
   game.reset();
+  replay.clear();
+  shiftOver = false;
+  closeDebrief();
   setWarnMode(null);
   tickerItems.length = 0;
   tickerItems.push(`NEW DAY: ${weather.day.label.toUpperCase()} · SPOTTERS ARE STANDING BY`);
@@ -729,6 +734,100 @@ document.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) =>
   b.addEventListener('click', () => setMode(b.dataset.mode as Mode)),
 );
 
+// ---------------------------------------------------------------------------
+// End of shift: the shift report and the storm replay
+// ---------------------------------------------------------------------------
+const replay = new Replay();
+let shiftOver = false;
+let replayOn = false;
+let replayPos = 0;
+let replayHold = 0;
+const debriefEl = $('debrief');
+const replayCanvas = $<HTMLCanvasElement>('db-replay');
+
+function endShift(early: boolean): void {
+  shiftOver = true;
+  paused = true;
+  syncSpeedButtons();
+  setWarnMode(null);
+  scope.finishReveal();
+  replay.record(scope.scanTime, scope.dbz, game.warnings, game.reports);
+  sounds.allClear();
+  pushTicker(`SHIFT OVER AT ${ampm(weather.time)} · THANK YOU SPOTTERS!`);
+
+  const st = game.stats;
+  const rank = rankFor(game.score);
+  const best = loadBest(dayKey);
+  const isBest = best === null || game.score > best;
+  if (isBest) saveBest(dayKey, game.score);
+
+  $('db-kicker').textContent = `${early ? 'SHIFT ENDED EARLY' : 'SHIFT OVER'} · ${clockText(weather.time)} · ${weather.day.label.toUpperCase()}`;
+  $('db-rank').textContent = `${rank.icon} ${rank.title}`;
+  $('db-score').innerHTML =
+    `Score ${game.score}` +
+    (isBest ? '<span class="new">★ NEW HIGH SCORE!</span>' : ` <span class="dim">· best ${best}</span>`);
+
+  const warnings = st.issued.svr + st.issued.svrd + st.issued.tor + st.issued.tore;
+  const watches = st.issued.sva + st.issued.toa;
+  const pod = game.hits + game.misses ? Math.round((100 * game.hits) / (game.hits + game.misses)) : 0;
+  const lead = st.leads.length ? Math.round(st.leads.reduce((a, b) => a + b, 0) / st.leads.length) : 0;
+  const stat = (v: string | number, l: string) => `<div class="stat"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+  $('db-grid').innerHTML =
+    stat(warnings, 'warnings issued') +
+    stat(watches, 'watches issued') +
+    stat(`${pod}%`, 'reports warned') +
+    stat(`${lead} min`, 'average lead time') +
+    stat(`${st.tornadoesWarned}/${st.tornadoes}`, 'tornado reports warned') +
+    stat(game.falseAlarms, 'false alarms');
+
+  const hl: string[] = [];
+  if (st.best) hl.push(`🏅 <b>Best call (+${st.best.pts}):</b> ${escapeHtml(st.best.text)}`);
+  if (st.maxTornado)
+    hl.push(`🌪 <b>Strongest tornado:</b> EF${st.maxTornado.ef} ${escapeHtml(st.maxTornado.where)} ${st.maxTornado.warned ? '(warned ✔)' : '(missed ✘)'}`);
+  if (st.maxHail) hl.push(`🧊 <b>Biggest hail:</b> ${st.maxHail.size.toFixed(2)}" ${escapeHtml(st.maxHail.where)}`);
+  if (st.maxWind) hl.push(`💨 <b>Strongest wind:</b> ${st.maxWind.mph} mph ${escapeHtml(st.maxWind.where)}`);
+  if (st.extremesWarned) hl.push(`💥 <b>${st.extremesWarned}</b> extreme report${st.extremesWarned > 1 ? 's' : ''} warned`);
+  if (!hl.length) hl.push('A quiet shift. Sometimes the sky just takes a nap.');
+  $('db-highlights').innerHTML = hl.map((h) => `<li>${h}</li>`).join('');
+
+  debriefEl.classList.remove('hidden');
+  replayOn = true;
+  replayPos = 0;
+  replayHold = 0;
+}
+
+function closeDebrief(): void {
+  debriefEl.classList.add('hidden');
+  replayOn = false;
+}
+
+/** Play the replay at ~8 scans a second, pausing a moment on the last frame. */
+function tickReplay(dt: number): void {
+  const n = replay.frames.length;
+  if (!n) return;
+  if (replayPos >= n - 1) {
+    replayHold += dt;
+    if (replayHold > 2.5) {
+      replayPos = 0;
+      replayHold = 0;
+    }
+  } else {
+    replayPos = Math.min(n - 1, replayPos + dt * 8);
+  }
+  const k = Math.floor(replayPos);
+  replay.draw(replayCanvas, k, clockText(replay.frames[k].time), geo.towns);
+}
+
+$('endshift').addEventListener('click', (e) => {
+  (e.currentTarget as HTMLButtonElement).blur();
+  if (!shiftOver || debriefEl.classList.contains('hidden')) endShift(true);
+});
+$('db-again').addEventListener('click', () => newDay());
+$('db-keep').addEventListener('click', () => {
+  closeDebrief();
+  setSpeed(speed);
+});
+
 const SPEEDS = [30, 60, 120, 240];
 function setSpeed(s: number): void {
   speed = s;
@@ -798,8 +897,10 @@ function updateHud(): void {
     lastClock = txt;
     clockEl.textContent = txt;
     const tor = weather.cells.filter((c) => c.tornado).length;
+    const left = Math.max(0, Math.ceil(SHIFT_MINUTES - weather.time));
+    const shiftTxt = shiftOver ? 'Overtime!' : left <= WIND_DOWN_MINUTES ? `Sunset: shift ends in ${left} min` : `Shift ends 20:00`;
     infoEl.textContent =
-      `Storms ${weather.cells.length} · Steering from ${Math.round(((weather.windFromDeg % 360) + 360) % 360)}° at ${Math.round(weather.windKmh)} km/h` +
+      `${shiftTxt} · Storms ${weather.cells.length} · Steering from ${Math.round(((weather.windFromDeg % 360) + 360) % 360)}° at ${Math.round(weather.windKmh)} km/h` +
       (debug ? ` · Tornadoes ${tor}` : '');
   }
 }
@@ -1027,6 +1128,10 @@ window.addEventListener('keydown', (e) => {
     case 'B':
       smoothing = !smoothing;
       break;
+    case 'x':
+    case 'X':
+      if (debriefEl.classList.contains('hidden')) endShift(!shiftOver || weather.time < SHIFT_MINUTES);
+      break;
     case 'n':
     case 'N':
       newDay();
@@ -1052,12 +1157,17 @@ function frame(now: number): void {
   const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
   last = now;
 
+  // As the sun sets, fewer new storms fire, so the shift winds down.
+  weather.activity = shiftOver ? 1 : 1 - 0.9 * smoothstep((weather.time - (SHIFT_MINUTES - WIND_DOWN_MINUTES)) / WIND_DOWN_MINUTES);
   if (!paused) weather.update((dt * speed) / 60);
   game.update(weather, (x, y) => geo.describe(x, y));
   if (weather.time >= nextScan) {
     scope.finishReveal(); // never leave a half-revealed scan behind
+    replay.record(scope.scanTime, scope.dbz, game.warnings, game.reports);
     takeScan();
   }
+  if (!shiftOver && weather.time >= SHIFT_MINUTES) endShift(false);
+  if (replayOn) tickReplay(dt);
   // The beam sweeps each new scan in quickly, then the picture holds until the next one.
   const realSecondsPerScan = (SCAN_MINUTES * 60) / speed;
   const sweepSeconds = Math.min(1.6, Math.max(0.5, realSecondsPerScan * 0.7));

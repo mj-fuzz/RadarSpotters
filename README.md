@@ -37,6 +37,11 @@ bottom, and issuing a Tornado warning sets off a (simulated!) Emergency Alert: f
 ticker, alert tones and a robot voice reading the warning. The tones are deliberately NOT the real EAS
 tones, which may not be used outside real alerts. `M` mutes all sounds.
 
+**Shifts:** a shift runs from 14:00 to 20:00 (about 6 real minutes at 60×). Storms wind down as the
+sun sets, then the **Shift Report** shows your rank (Rookie Spotter → Chief Meteorologist), stats,
+highlights, your high score for that kind of day, and a time-lapse replay of the whole afternoon with
+your warnings. `X` (🏁 End shift) ends a shift early.
+
 Other controls: `Space` pause · `+`/`-` speed · `N` new day · drag to pan · scroll/pinch to zoom ·
 `0` reset view · `B` smooth/blocky pixels · `M` mute · `D` cheat mode (shows every storm's type, stage, and path) · `H` help.
 
@@ -70,15 +75,9 @@ Android builds can come later by wrapping the same code with Tauri.
 - [x] Bow echoes (with bookend comma heads and rear-inflow jets), gust fronts, a Derecho day
 - [x] Scan-by-scan radar updates (a new volume scan every 4 game minutes)
 - [x] Draw SVR / TOR warning cones along storm motion and get scored against storm reports
+- [x] Shifts with a shift report, ranks, high scores and a storm replay
 - [ ] Spot storm cells / tornado cells modes
 - [ ] Flash flooding, lightning & the power grid
 - [ ] Scenarios: derecho, hurricane, microbursts, snow / sleet / freezing rain, traffic reports
 - [ ] Radar DOWN! Track storms from spotter reports only
 - [ ] Native builds (Tauri) for Windows, Linux, Android
-
-## Privacy rule (important!)
-
-Nothing personal goes into this repo: no real names, no absolute file paths, no personal emails.
-A git hook (`scripts/privacy-check.mjs`, enabled by `npm install`) blocks commits that contain them.
-Copy `.privacy-blocklist.example` to `.privacy-blocklist` and put any extra words that must never be committed (like real names) one per line in it. That local
-file is git-ignored and never leaves your computer.

@@ -57,6 +57,16 @@ export class AlertSounds {
     for (let k = 0; k < 3; k++) this.tone(1000, t + k * 0.22, 0.14, 0.16, 'triangle');
   }
 
+  /** A calm descending "all clear" arpeggio for the end of a shift. */
+  allClear(): void {
+    const c = this.ctx;
+    if (!c || !this.master || this.muted) return;
+    const t = c.currentTime + 0.1;
+    [784, 659, 523, 392].forEach((f, k) => this.tone(f, t + k * 0.28, 0.5, 0.12, 'sine'));
+    this.tone(523, t + 1.2, 1.4, 0.08, 'sine');
+    this.tone(659, t + 1.2, 1.4, 0.06, 'sine');
+  }
+
   /** A rising two-note "heads up" for a new watch, played twice. */
   watchAlert(): void {
     const c = this.ctx;

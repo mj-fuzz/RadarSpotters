@@ -77,6 +77,35 @@ export interface Report {
   warned: boolean;
 }
 
+/** Everything the end-of-shift report needs. */
+export interface ShiftStats {
+  issued: Record<WarningKind, number>;
+  /** Lead time (minutes) of every warned report. */
+  leads: number[];
+  tornadoes: number;
+  tornadoesWarned: number;
+  extremesWarned: number;
+  maxHail: { size: number; where: string } | null;
+  maxWind: { mph: number; where: string } | null;
+  maxTornado: { ef: number; where: string; warned: boolean } | null;
+  /** The single best-scoring call of the shift. */
+  best: { pts: number; text: string } | null;
+}
+
+function emptyStats(): ShiftStats {
+  return {
+    issued: { svr: 0, svrd: 0, tor: 0, tore: 0, sva: 0, toa: 0 },
+    leads: [],
+    tornadoes: 0,
+    tornadoesWarned: 0,
+    extremesWarned: 0,
+    maxHail: null,
+    maxWind: null,
+    maxTornado: null,
+    best: null,
+  };
+}
+
 export interface Toast {
   text: string;
   good: boolean;
@@ -114,6 +143,7 @@ export class WarningGame {
   hits = 0;
   misses = 0;
   falseAlarms = 0;
+  stats: ShiftStats = emptyStats();
 
   /** Called when a storm report comes in (for the ticker). */
   onReport: ((r: Report, what: string, where: string) => void) | null = null;
@@ -134,6 +164,7 @@ export class WarningGame {
     this.hits = 0;
     this.misses = 0;
     this.falseAlarms = 0;
+    this.stats = emptyStats();
     this.cooldown.clear();
     this.clock = 0;
   }
@@ -220,6 +251,7 @@ export class WarningGame {
 
   private create(kind: WarningKind, c: { poly: Array<[number, number]>; area: number }, x0: number, y0: number, now: number): Warning {
     const info = KINDS[kind];
+    this.stats.issued[kind]++;
     const inWatch =
       !info.watch &&
       this.warnings.some(
@@ -339,6 +371,17 @@ export class WarningGame {
     const where = describe(x, y);
     this.onReport?.(r, what, where);
 
+    // Records for the shift report.
+    const st = this.stats;
+    if (kind === 'hail' && (!st.maxHail || magnitude > st.maxHail.size)) st.maxHail = { size: magnitude, where };
+    if (kind === 'wind' && (!st.maxWind || magnitude > st.maxWind.mph)) st.maxWind = { mph: magnitude, where };
+    if (kind === 'tornado') {
+      st.tornadoes++;
+      if (r.warned) st.tornadoesWarned++;
+      if (!st.maxTornado || magnitude > st.maxTornado.ef) st.maxTornado = { ef: magnitude, where, warned: r.warned };
+    }
+    if (extreme && r.warned) st.extremesWarned++;
+
     if (covering.length) {
       // Score with the warning that earns the most.
       let best = covering[0];
@@ -364,6 +407,10 @@ export class WarningGame {
       this.hits++;
       const lead = Math.max(0, Math.round(now - best.issued));
       const tagText = bestTags.length ? ` [${bestTags.join(' · ')}]` : '';
+      st.leads.push(lead);
+      if (!st.best || total > st.best.pts) {
+        st.best = { pts: total, text: `${KINDS[best.kind].name} caught ${what} ${where} with ${lead} min lead time${tagText}` };
+      }
       this.toast(`✔ ${what} ${where} — ${lead} min lead${tagText}  +${total}`, true, now);
     } else if (now < GRACE_MINUTES) {
       this.toast(`${what} ${where} (warm-up, no penalty)`, false, now);
