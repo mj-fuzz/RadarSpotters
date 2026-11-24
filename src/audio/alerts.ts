@@ -57,6 +57,17 @@ export class AlertSounds {
     for (let k = 0; k < 3; k++) this.tone(1000, t + k * 0.22, 0.14, 0.16, 'triangle');
   }
 
+  /** A rising two-note "heads up" for a new watch, played twice. */
+  watchAlert(): void {
+    const c = this.ctx;
+    if (!c || !this.master || this.muted || this.easPlaying) return;
+    const t = c.currentTime;
+    for (let k = 0; k < 2; k++) {
+      this.tone(660, t + k * 0.5, 0.18, 0.14, 'sine');
+      this.tone(990, t + k * 0.5 + 0.2, 0.25, 0.14, 'sine');
+    }
+  }
+
   /**
    * The full simulated EAS sequence: three digital chirp bursts, the two-tone
    * alarm, the voice reading the warning, then three short "end" bursts.
@@ -91,9 +102,9 @@ export class AlertSounds {
     }
     t += 0.4;
     // The two-tone alarm (NOT the real EAS pitches).
-    this.tone(698, t, 4, 0.13, 'sine');
-    this.tone(1047, t, 4, 0.13, 'sine');
-    t += 4.3;
+    this.tone(698, t, 3.5, 0.13, 'sine');
+    this.tone(1047, t, 3.5, 0.13, 'sine');
+    t += 3.8;
     const speechAt = (t - c.currentTime) * 1000;
     this.after(speechAt, () =>
       this.say(job.speech, () => {
@@ -115,7 +126,7 @@ export class AlertSounds {
       return;
     }
     const u = new SpeechSynthesisUtterance(text);
-    u.rate = 0.92;
+    u.rate = 1.0;
     u.pitch = 0.7;
     u.volume = 1;
     const voices = window.speechSynthesis.getVoices();
@@ -130,7 +141,7 @@ export class AlertSounds {
     u.onend = end;
     u.onerror = end;
     // Safety net in case the voice never reports that it finished.
-    this.after(Math.max(6000, text.length * 90), end);
+    this.after(Math.max(6000, text.length * 75), end);
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
   }

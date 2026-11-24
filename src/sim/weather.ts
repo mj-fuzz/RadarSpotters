@@ -362,7 +362,8 @@ export class Weather {
         c.tornado = {
           age: 0,
           life: r.range(4, 16),
-          vmax: r.range(35, 80),
+          // Most tornadoes are weak to strong; the strongest mesos can spin up violent EF4/EF5 monsters.
+          vmax: c.rot > 28 && r.chance(0.25) ? r.range(70, 100) : r.range(32, 66),
           ox: r.range(-0.8, 0.8),
           oy: r.range(-0.8, 0.8),
         };

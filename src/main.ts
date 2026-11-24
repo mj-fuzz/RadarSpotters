@@ -1,6 +1,6 @@
 import './style.css';
 import { AlertSounds } from './audio/alerts';
-import { WARNING_MINUTES, WarningGame, inside, reportText, type Warning, type WarningKind } from './game/warnings';
+import { KINDS, WarningGame, inside, reportText, type Warning, type WarningKind } from './game/warnings';
 import { Geography, RADAR_ID, compass, type Polyline } from './map/geography';
 import { MODES, Scope, type Mode } from './radar/scope';
 import { Fields, RANGE_KM } from './sim/fields';
@@ -29,10 +29,10 @@ let smoothing = true;
 
 // The warning game.
 const game = new WarningGame();
-/** Which warning the player is about to draw (null = normal pan/zoom). */
+/** The selected tool: which warning/watch the player draws (null = cursor: pan and look). Stays until switched. */
 let warnMode: WarningKind | null = null;
-/** The cone being drawn right now, in km. */
-let drawing: { x0: number; y0: number; x1: number; y1: number; pointerId: number } | null = null;
+/** The shape being drawn right now, in km (plus the finger/mouse position in screen pixels). */
+let drawing: { x0: number; y0: number; x1: number; y1: number; pointerId: number; cx: number; cy: number } | null = null;
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
@@ -255,11 +255,6 @@ function drawTowns(): void {
   ctx.restore();
 }
 
-const WARN_COLORS: Record<WarningKind, [string, string]> = {
-  svr: ['255,216,74', 'SVR'],
-  tor: ['255,60,60', 'TOR'],
-};
-
 function polyPath(poly: Array<[number, number]>): void {
   ctx.beginPath();
   poly.forEach(([x, y], k) => (k ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
@@ -272,24 +267,43 @@ function drawWarnings(): void {
   ctx.font = `700 ${11 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (const w of game.warnings) {
-    const [rgb, label] = WARN_COLORS[w.kind];
+  // Watches underneath, then warnings, tornado products on top.
+  const order: WarningKind[] = ['sva', 'toa', 'svr', 'svrd', 'tor', 'tore'];
+  const list = [...game.warnings].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+  for (const w of list) {
+    const info = KINDS[w.kind];
+    const rgb = info.rgb;
+    const label = w.number ? `${info.short} #${w.number}` : info.short;
     // Fade out over the last few minutes, and after expiry.
     const left = w.expires - now;
     const alpha = left > 5 ? 1 : left > 0 ? 0.45 + 0.55 * (left / 5) : Math.max(0, 0.45 * (1 + left / 3));
     polyPath(w.poly);
-    ctx.fillStyle = `rgba(${rgb},${0.1 * alpha})`;
+    ctx.fillStyle = `rgba(${rgb},${(info.watch ? 0.05 : 0.1) * alpha})`;
     ctx.fill();
     // Dark edge underneath so the outline stands out even on top of red/yellow echoes.
+    const special = w.kind === 'svrd' || w.kind === 'tore';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = 6 * dpr;
+    ctx.lineWidth = (special ? 9 : 6) * dpr;
     ctx.strokeStyle = `rgba(0,0,0,${0.7 * alpha})`;
     ctx.stroke();
-    ctx.lineWidth = 3 * dpr;
+    if (info.watch) ctx.setLineDash([10 * dpr, 6 * dpr]);
+    ctx.lineWidth = (special ? 5 : 3) * dpr;
     ctx.strokeStyle = `rgba(${rgb},${alpha})`;
     ctx.stroke();
-    const cx = w.poly.reduce((a, p) => a + p[0], 0) / w.poly.length;
-    const cy = w.poly.reduce((a, p) => a + p[1], 0) / w.poly.length;
+    ctx.setLineDash([]);
+    if (special) {
+      // Special warnings get a white inner stripe so they look extra serious.
+      ctx.lineWidth = 1.2 * dpr;
+      ctx.strokeStyle = `rgba(255,255,255,${0.9 * alpha})`;
+      ctx.stroke();
+    }
+    let cx = w.poly.reduce((a, p) => a + p[0], 0) / w.poly.length;
+    let cy = w.poly.reduce((a, p) => a + p[1], 0) / w.poly.length;
+    if (info.watch) {
+      // Watch label sits just inside the top-left corner, out of the storms' way.
+      cx = Math.min(...w.poly.map((p) => p[0])) + (60 * dpr) / view.scale;
+      cy = Math.max(...w.poly.map((p) => p[1])) - (12 * dpr) / view.scale;
+    }
     const mins = Math.max(0, Math.ceil(left));
     const text = left > 0 ? `${label} ${mins}m` : `${label} expired`;
     ctx.lineWidth = 4 * dpr;
@@ -299,8 +313,8 @@ function drawWarnings(): void {
     ctx.fillText(text, sx(cx), sy(cy));
   }
   if (drawing && warnMode) {
-    const c = WarningGame.cone(drawing.x0, drawing.y0, drawing.x1, drawing.y1);
-    const [rgb] = WARN_COLORS[warnMode];
+    const c = WarningGame.shape(warnMode, drawing.x0, drawing.y0, drawing.x1, drawing.y1);
+    const rgb = KINDS[warnMode].rgb;
     if (c) {
       polyPath(c.poly);
       ctx.fillStyle = `rgba(${rgb},0.12)`;
@@ -451,21 +465,34 @@ const scoreEl = $('score');
 const toastsEl = $('toasts');
 const hintEl = $('hint');
 
+const TOOL_HINTS: Record<WarningKind, string> = {
+  svr: 'SEVERE THUNDERSTORM warning: press on the storm and drag the way it is moving.',
+  svrd: 'DESTRUCTIVE (PDS) severe warning: for 80+ mph wind or 2.75"+ hail. Double points if it verifies!',
+  tor: 'TORNADO warning: press on the storm and drag the way it is moving.',
+  tore: 'TORNADO EMERGENCY: only for a violent tornado (EF3+) on the ground. Triple points, big penalty if wrong!',
+  sva: 'SEVERE THUNDERSTORM WATCH: drag a big box where storms may turn severe in the next 90 minutes.',
+  toa: 'TORNADO WATCH: drag a big box where tornadoes are possible in the next 90 minutes.',
+};
+let hintTimer = 0;
+function showHint(text: string): void {
+  hintEl.textContent = text;
+  hintEl.classList.remove('hidden');
+  window.clearTimeout(hintTimer);
+  hintTimer = window.setTimeout(() => hintEl.classList.add('hidden'), 4500);
+}
+
+/** Pick a tool. It stays selected until another one is picked (C / Esc = cursor). */
 function setWarnMode(k: WarningKind | null): void {
   warnMode = k;
   drawing = null;
-  document.querySelectorAll<HTMLButtonElement>('[data-warn]').forEach((b) => b.classList.toggle('on', b.dataset.warn === k));
+  document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.classList.toggle('on', (b.dataset.tool || null) === k));
   canvas.style.cursor = k ? 'cell' : 'crosshair';
-  if (k) {
-    hintEl.textContent = `${k === 'tor' ? 'TORNADO' : 'SEVERE THUNDERSTORM'} warning: press on the storm and drag the way it's moving (${WARNING_MINUTES[k]} min). Esc to cancel.`;
-    hintEl.classList.remove('hidden');
-  } else {
-    hintEl.classList.add('hidden');
-  }
+  if (k) showHint(`${TOOL_HINTS[k]}  (${KINDS[k].minutes} min · right-drag or two fingers to pan · C for cursor)`);
+  else hintEl.classList.add('hidden');
 }
-document.querySelectorAll<HTMLButtonElement>('[data-warn]').forEach((b) =>
+document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) =>
   b.addEventListener('click', () => {
-    const k = b.dataset.warn as WarningKind;
+    const k = (b.dataset.tool || null) as WarningKind | null;
     setWarnMode(warnMode === k ? null : k);
     b.blur();
   }),
@@ -507,28 +534,59 @@ function areaText(w: Warning): string {
     return geo.describe(cx, cy);
   }
   if (names.length === 1) return names[0];
+  if (names.length > 4) return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more towns`;
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 function announceWarning(w: Warning): void {
   w.areaText = areaText(w);
   const until = ampm(w.expires);
-  if (w.kind === 'tor') {
-    const headline = `TORNADO WARNING for ${w.areaText} until ${until}`;
-    pushTicker(`⚠ ${headline.toUpperCase()} · TAKE SHELTER NOW`);
-    startEas(
-      headline,
-      `This is the Stormhaven Weather Service. A tornado warning has been issued for ${w.areaText} until ${until}. ` +
-        `Take shelter now in a basement, or an interior room on the lowest floor, away from windows.`,
-    );
-  } else {
-    pushTicker(`SEVERE THUNDERSTORM WARNING FOR ${w.areaText.toUpperCase()} UNTIL ${until}`);
-    sounds.svrAlert();
+  const area = w.areaText;
+  const intro = 'This is the Stormhaven Weather Service.';
+  switch (w.kind) {
+    case 'svr':
+      pushTicker(`SEVERE THUNDERSTORM WARNING FOR ${area.toUpperCase()} UNTIL ${until}`);
+      sounds.svrAlert();
+      break;
+    case 'svrd':
+      pushTicker(`💥 DESTRUCTIVE SEVERE THUNDERSTORM WARNING FOR ${area.toUpperCase()} UNTIL ${until} · 80 MPH WINDS OR GIANT HAIL`);
+      startEas(
+        `DESTRUCTIVE SEVERE THUNDERSTORM WARNING for ${area} until ${until}`,
+        `${intro} A destructive severe thunderstorm warning has been issued for ${area} until ${until}. ` +
+          `Winds of 80 miles per hour or more, or hail larger than baseballs, are expected. Get indoors and away from windows now.`,
+        'warning',
+      );
+      break;
+    case 'tor':
+      pushTicker(`⚠ TORNADO WARNING FOR ${area.toUpperCase()} UNTIL ${until} · TAKE SHELTER NOW`);
+      startEas(
+        `TORNADO WARNING for ${area} until ${until}`,
+        `${intro} A tornado warning has been issued for ${area} until ${until}. ` +
+          `Take shelter now in a basement, or an interior room on the lowest floor, away from windows.`,
+        'warning',
+      );
+      break;
+    case 'tore':
+      pushTicker(`☠ TORNADO EMERGENCY FOR ${area.toUpperCase()} · A LARGE AND EXTREMELY DANGEROUS TORNADO IS ON THE GROUND · TAKE COVER NOW`);
+      startEas(
+        `TORNADO EMERGENCY for ${area} until ${until}`,
+        `${intro} This is a tornado emergency for ${area}. A large and extremely dangerous tornado is on the ground. ` +
+          `This is a particularly dangerous situation. Take cover now! Get underground if you can.`,
+        'emergency',
+      );
+      break;
+    case 'sva':
+    case 'toa': {
+      const name = w.kind === 'toa' ? 'TORNADO WATCH' : 'SEVERE THUNDERSTORM WATCH';
+      pushTicker(`${name} #${w.number} IN EFFECT UNTIL ${until} FOR ${area.toUpperCase()}`);
+      sounds.watchAlert();
+      break;
+    }
   }
 }
 
 let easText = '';
-function startEas(headline: string, speech: string): void {
+function startEas(headline: string, speech: string, level: 'warning' | 'emergency'): void {
   sounds.eas(speech, () => {
     easEl.classList.add('hidden');
     tickerEl.classList.remove('eas-on');
@@ -538,6 +596,7 @@ function startEas(headline: string, speech: string): void {
   });
   // Show it right away (if a second one is queued, it takes over the banner).
   easSub.textContent = headline.toUpperCase();
+  easEl.classList.toggle('emergency', level === 'emergency');
   easEl.classList.remove('hidden');
   tickerEl.classList.add('eas-on');
   tickerLabel.textContent = 'EAS ALERT';
@@ -570,19 +629,26 @@ game.onReport = (r, what, where) => {
   sounds.chime();
 };
 game.onExpire = (w) => {
-  pushTicker(`${w.kind === 'tor' ? 'TORNADO' : 'SEVERE THUNDERSTORM'} WARNING FOR ${w.areaText.toUpperCase()} HAS EXPIRED`);
+  const info = KINDS[w.kind];
+  pushTicker(`${info.name.toUpperCase()}${w.number ? ` #${w.number}` : ''} FOR ${w.areaText.toUpperCase()} HAS EXPIRED`);
 };
 
+const ICONS: Record<WarningKind, string> = { svr: '⚠', svrd: '💥', tor: '🌪', tore: '☠', sva: '▭', toa: '▭' };
 let lastAlerts = '';
 function updateAlerts(): void {
   const now = weather.time;
-  const active = game.warnings.filter((w) => now < w.expires).sort((a, b) => (a.kind === b.kind ? a.expires - b.expires : a.kind === 'tor' ? -1 : 1));
+  const rank: WarningKind[] = ['tore', 'tor', 'svrd', 'svr', 'toa', 'sva'];
+  const active = game.warnings
+    .filter((w) => now < w.expires)
+    .sort((a, b) => (a.kind === b.kind ? a.expires - b.expires : rank.indexOf(a.kind) - rank.indexOf(b.kind)));
   let html = `<div class="alerts-head">ACTIVE ALERTS · ${active.length}</div>`;
   for (const w of active) {
     const left = Math.max(0, Math.ceil(w.expires - now));
-    const fresh = w.kind === 'tor' && now - w.issued < 3 ? ' fresh' : '';
+    const info = KINDS[w.kind];
+    const fresh = (w.kind === 'tor' || w.kind === 'tore') && now - w.issued < 3 ? ' fresh' : '';
+    const title = `${ICONS[w.kind]} ${info.name.toUpperCase()}${w.number ? ` #${w.number}` : ''}`;
     html +=
-      `<div class="alert ${w.kind}${fresh}"><b>${w.kind === 'tor' ? '🌪 TORNADO WARNING' : '⚠ SEVERE T-STORM WARNING'}</b>` +
+      `<div class="alert ${w.kind}${fresh}" style="--c:${info.rgb}"><b>${title}</b>` +
       `${escapeHtml(w.areaText)}<div class="meta">until ${ampm(w.expires)} · ${left} min left · ${w.reports} report${w.reports === 1 ? '' : 's'}</div></div>`;
   }
   if (html !== lastAlerts) {
@@ -726,15 +792,21 @@ function updateReadout(): void {
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
 
+canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // right-drag pans
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
-  if (warnMode && pointers.size === 0 && e.button === 0) {
-    // Start drawing a warning cone from the storm.
+  if (warnMode && pointers.size === 0 && !drawing && e.button === 0) {
+    // Start drawing a warning cone (or watch box) from the storm.
     const rect = canvas.getBoundingClientRect();
     const x = wx((e.clientX - rect.left) * dpr);
     const y = wy((e.clientY - rect.top) * dpr);
-    drawing = { x0: x, y0: y, x1: x, y1: y, pointerId: e.pointerId };
+    drawing = { x0: x, y0: y, x1: x, y1: y, pointerId: e.pointerId, cx: e.clientX, cy: e.clientY };
     return;
+  }
+  if (drawing && e.pointerType === 'touch') {
+    // A second finger: they want to pinch/pan, not draw.
+    pointers.set(drawing.pointerId, { x: drawing.cx, y: drawing.cy });
+    drawing = null;
   }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) {
@@ -749,6 +821,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (drawing && drawing.pointerId === e.pointerId) {
     drawing.x1 = wx(pointerX * dpr);
     drawing.y1 = wy(pointerY * dpr);
+    drawing.cx = e.clientX;
+    drawing.cy = e.clientY;
     return;
   }
   const p = pointers.get(e.pointerId);
@@ -771,10 +845,9 @@ const endPointer = (e: PointerEvent) => {
     if (e.type === 'pointerup' && warnMode) {
       const w = game.issue(warnMode, drawing.x0, drawing.y0, drawing.x1, drawing.y1, weather.time);
       if (w) {
-        setWarnMode(null);
-        announceWarning(w);
+        announceWarning(w); // the tool stays selected for the next one
       } else {
-        hintEl.textContent = 'Drag further! Press on the storm and drag the way it is heading.';
+        showHint(KINDS[warnMode].watch ? 'Drag a bigger box! Watches cover a big area.' : 'Drag further! Press on the storm and drag the way it is heading.');
       }
     }
     drawing = null;
@@ -835,13 +908,34 @@ window.addEventListener('keydown', (e) => {
     case '_':
       setSpeed(SPEEDS[Math.max(0, SPEEDS.indexOf(speed) - 1)]);
       break;
+    // Tools (they stay selected until you pick another).
+    case 'c':
+    case 'C':
+      setWarnMode(null);
+      break;
     case 'w':
     case 'W':
-      setWarnMode(warnMode === 'svr' ? null : 'svr');
+      setWarnMode('svr');
+      break;
+    case 'e':
+    case 'E':
+      setWarnMode('svrd');
       break;
     case 't':
     case 'T':
-      setWarnMode(warnMode === 'tor' ? null : 'tor');
+      setWarnMode('tor');
+      break;
+    case 'y':
+    case 'Y':
+      setWarnMode('tore');
+      break;
+    case 'a':
+    case 'A':
+      setWarnMode('sva');
+      break;
+    case 's':
+    case 'S':
+      setWarnMode('toa');
       break;
     case 'm':
     case 'M':
@@ -855,8 +949,8 @@ window.addEventListener('keydown', (e) => {
       debug = !debug;
       lastClock = '';
       break;
-    case 's':
-    case 'S':
+    case 'b':
+    case 'B':
       smoothing = !smoothing;
       break;
     case 'n':

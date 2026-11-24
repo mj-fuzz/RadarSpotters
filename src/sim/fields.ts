@@ -364,7 +364,8 @@ export class Fields {
           tdx = x - torX;
           tdy = y - torY;
           tr = Math.hypot(tdx, tdy);
-          if (torV > 45 && tr < 2) zAdd += zOf(50 + (torV - 45) * 0.4 - tr * 6);
+          const ball = 2 + Math.max(0, (torV - 60) / 20); // violent tornadoes loft a bigger debris ball
+          if (torV > 45 && tr < ball) zAdd += zOf(50 + (torV - 45) * 0.4 - (tr / ball) * 12);
         }
 
         // Fade out softly before the edge of this cell's drawing box (no straight cut-off edges).
