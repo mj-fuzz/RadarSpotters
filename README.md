@@ -22,10 +22,11 @@ the map — with the clock cranked way up so it gets frantic.
 | 💥 PDS SVR | `E` | Destructive: 80+ mph wind or 2.75"+ hail | ×2 when a destructive report verifies |
 | 🌪 TOR | `T` | Tornado Warning | |
 | ☠ TOR EMERG | `Y` | Tornado Emergency: violent (EF3+) tornado | ×3 + 200 when it verifies |
-| ▭ SVR WATCH | `A` | Big box, 90 minutes | points per report, ×1.2 for warnings inside |
-| ▭ TOR WATCH | `S` | Big box, 90 minutes | points per report, ×1.2 for warnings inside |
+| ▭ SVR WATCH | `A` | 4-corner watch, 90 minutes | points per report, ×1.2 for warnings inside |
+| ▭ TOR WATCH | `S` | 4-corner watch, 90 minutes | points per report, ×1.2 for warnings inside |
 
-For warnings, press on the storm and drag the way it's moving; for watches, drag a big box. Right-drag
+For warnings, press on the storm and drag the way it's moving; for watches, click 4 corners around a
+big area (usually a parallelogram, like real watches; `Backspace` undoes a corner, `Esc` clears). Right-drag
 (or two fingers) pans while a tool is picked. Storm reports (hail ◆, wind ■, tornado ▼) score points
 inside your warnings (bonus for lead time, a tight box, and EXTREME storms); reports outside are misses,
 and products with no reports are false alarms. Special warnings that never catch an extreme report are

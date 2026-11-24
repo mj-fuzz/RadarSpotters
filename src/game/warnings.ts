@@ -189,9 +189,36 @@ export class WarningGame {
     return KINDS[kind].watch ? WarningGame.box(x0, y0, x1, y1) : WarningGame.cone(x0, y0, x1, y1);
   }
 
+  /**
+   * A watch outlined by clicking its corners (usually 4, like a real watch parallelogram).
+   * Corners are sorted around their centre so clicking them "out of order" never makes a bow-tie.
+   */
+  static outline(pts: Array<[number, number]>): { poly: Array<[number, number]>; area: number } | null {
+    if (pts.length < 3) return null;
+    const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+    const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+    const poly = [...pts].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+    let area = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) area += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
+    area = Math.abs(area) / 2;
+    if (area < MIN_WATCH * MIN_WATCH) return null;
+    return { poly, area };
+  }
+
+  /** Issue a watch from its clicked corners. */
+  issueWatch(kind: WarningKind, pts: Array<[number, number]>, now: number): Warning | null {
+    const c = WarningGame.outline(pts);
+    if (!c || !KINDS[kind].watch) return null;
+    return this.create(kind, c, pts[0][0], pts[0][1], now);
+  }
+
   issue(kind: WarningKind, x0: number, y0: number, x1: number, y1: number, now: number): Warning | null {
     const c = WarningGame.shape(kind, x0, y0, x1, y1);
     if (!c) return null;
+    return this.create(kind, c, x0, y0, now);
+  }
+
+  private create(kind: WarningKind, c: { poly: Array<[number, number]>; area: number }, x0: number, y0: number, now: number): Warning {
     const info = KINDS[kind];
     const inWatch =
       !info.watch &&

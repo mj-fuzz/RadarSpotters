@@ -33,6 +33,11 @@ const game = new WarningGame();
 let warnMode: WarningKind | null = null;
 /** The shape being drawn right now, in km (plus the finger/mouse position in screen pixels). */
 let drawing: { x0: number; y0: number; x1: number; y1: number; pointerId: number; cx: number; cy: number } | null = null;
+/** Corners clicked so far for a watch (4 clicks issues it). */
+const watchPts: Array<[number, number]> = [];
+/** The last corner tap, so a two-finger pinch right after it doesn't leave a stray corner. */
+let lastWatchTap: { pointerId: number; time: number; cx: number; cy: number } | null = null;
+const WATCH_CORNERS = 4;
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
@@ -255,6 +260,12 @@ function drawTowns(): void {
   ctx.restore();
 }
 
+function sortAround(pts: Array<[number, number]>): Array<[number, number]> {
+  const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+  const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  return [...pts].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+}
+
 function polyPath(poly: Array<[number, number]>): void {
   ctx.beginPath();
   poly.forEach(([x, y], k) => (k ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
@@ -301,8 +312,9 @@ function drawWarnings(): void {
     let cy = w.poly.reduce((a, p) => a + p[1], 0) / w.poly.length;
     if (info.watch) {
       // Watch label sits just inside the top-left corner, out of the storms' way.
-      cx = Math.min(...w.poly.map((p) => p[0])) + (60 * dpr) / view.scale;
-      cy = Math.max(...w.poly.map((p) => p[1])) - (12 * dpr) / view.scale;
+      const top = w.poly.reduce((a, p) => (p[1] > a[1] ? p : a));
+      cx = top[0];
+      cy = top[1] - (16 * dpr) / view.scale;
     }
     const mins = Math.max(0, Math.ceil(left));
     const text = left > 0 ? `${label} ${mins}m` : `${label} expired`;
@@ -311,6 +323,37 @@ function drawWarnings(): void {
     ctx.strokeText(text, sx(cx), sy(cy));
     ctx.fillStyle = `rgba(${rgb},${alpha})`;
     ctx.fillText(text, sx(cx), sy(cy));
+  }
+  if (warnMode && KINDS[warnMode].watch && watchPts.length) {
+    // Watch being outlined: corners so far, plus a rubber band to the cursor.
+    const rgb = KINDS[warnMode].rgb;
+    let pts: Array<[number, number]> = [...watchPts];
+    if (pointerX >= 0) pts.push([wx(pointerX * dpr), wy(pointerY * dpr)]);
+    // Same corner ordering the finished watch will use, so the preview never bow-ties.
+    if (pts.length >= 3) pts = WarningGame.outline(pts)?.poly ?? sortAround(pts);
+    ctx.beginPath();
+    pts.forEach(([x, y], k) => (k ? ctx.lineTo(sx(x), sy(y)) : ctx.moveTo(sx(x), sy(y))));
+    if (pts.length >= 3) ctx.closePath();
+    ctx.fillStyle = `rgba(${rgb},0.08)`;
+    if (pts.length >= 3) ctx.fill();
+    ctx.lineWidth = 5 * dpr;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.stroke();
+    ctx.setLineDash([10 * dpr, 6 * dpr]);
+    ctx.lineWidth = 2.5 * dpr;
+    ctx.strokeStyle = `rgba(${rgb},1)`;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = `rgb(${rgb})`;
+    for (const [x, y] of watchPts) {
+      ctx.beginPath();
+      ctx.arc(sx(x), sy(y), 5 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.font = `700 ${12 * dpr}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.textAlign = 'left';
+    const [lx, ly] = watchPts[watchPts.length - 1];
+    ctx.fillText(`corner ${watchPts.length}/${WATCH_CORNERS}`, sx(lx) + 9 * dpr, sy(ly) - 9 * dpr);
   }
   if (drawing && warnMode) {
     const c = WarningGame.shape(warnMode, drawing.x0, drawing.y0, drawing.x1, drawing.y1);
@@ -470,8 +513,8 @@ const TOOL_HINTS: Record<WarningKind, string> = {
   svrd: 'DESTRUCTIVE (PDS) severe warning: for 80+ mph wind or 2.75"+ hail. Double points if it verifies!',
   tor: 'TORNADO warning: press on the storm and drag the way it is moving.',
   tore: 'TORNADO EMERGENCY: only for a violent tornado (EF3+) on the ground. Triple points, big penalty if wrong!',
-  sva: 'SEVERE THUNDERSTORM WATCH: drag a big box where storms may turn severe in the next 90 minutes.',
-  toa: 'TORNADO WATCH: drag a big box where tornadoes are possible in the next 90 minutes.',
+  sva: 'SEVERE THUNDERSTORM WATCH: click 4 corners around where storms may turn severe in the next 90 minutes (Backspace undo).',
+  toa: 'TORNADO WATCH: click 4 corners around where tornadoes are possible in the next 90 minutes (Backspace undo).',
 };
 let hintTimer = 0;
 function showHint(text: string): void {
@@ -485,6 +528,7 @@ function showHint(text: string): void {
 function setWarnMode(k: WarningKind | null): void {
   warnMode = k;
   drawing = null;
+  watchPts.length = 0;
   document.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach((b) => b.classList.toggle('on', (b.dataset.tool || null) === k));
   canvas.style.cursor = k ? 'cell' : 'crosshair';
   if (k) showHint(`${TOOL_HINTS[k]}  (${KINDS[k].minutes} min · right-drag or two fingers to pan · C for cursor)`);
@@ -793,8 +837,30 @@ const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // right-drag pans
+
+function finishWatch(): void {
+  if (!warnMode) return;
+  const w = game.issueWatch(warnMode, watchPts, weather.time);
+  watchPts.length = 0;
+  if (w) announceWarning(w);
+  else showHint('That watch is too small! Spread the corners out over a big area.');
+}
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
+  if (warnMode && KINDS[warnMode].watch && pointers.size === 0 && e.button === 0) {
+    // Watches: each click drops a corner; the 4th corner issues the watch.
+    const rect = canvas.getBoundingClientRect();
+    watchPts.push([wx((e.clientX - rect.left) * dpr), wy((e.clientY - rect.top) * dpr)]);
+    lastWatchTap = { pointerId: e.pointerId, time: performance.now(), cx: e.clientX, cy: e.clientY };
+    if (watchPts.length >= WATCH_CORNERS) finishWatch();
+    return;
+  }
+  if (lastWatchTap && e.pointerType === 'touch' && performance.now() - lastWatchTap.time < 400) {
+    // Second finger right after a tap: it was a pinch, not a corner.
+    watchPts.pop();
+    pointers.set(lastWatchTap.pointerId, { x: lastWatchTap.cx, y: lastWatchTap.cy });
+    lastWatchTap = null;
+  }
   if (warnMode && pointers.size === 0 && !drawing && e.button === 0) {
     // Start drawing a warning cone (or watch box) from the storm.
     const rect = canvas.getBoundingClientRect();
@@ -942,7 +1008,15 @@ window.addEventListener('keydown', (e) => {
       toggleMute();
       break;
     case 'Escape':
-      setWarnMode(null);
+      // First Esc clears half-placed watch corners; the next one goes back to the cursor.
+      if (watchPts.length) watchPts.length = 0;
+      else setWarnMode(null);
+      break;
+    case 'Backspace':
+      if (watchPts.length) {
+        e.preventDefault();
+        watchPts.pop();
+      }
       break;
     case 'd':
     case 'D':
