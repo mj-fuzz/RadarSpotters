@@ -35,14 +35,29 @@
       <div class="group">
         <select id="day" title="What kind of weather day?"></select>
         <button id="newday" title="New day (N)">New day</button>
+        <button id="mute" title="Sound on/off (M)">🔊</button>
         <button id="help-btn" title="Help (H)">?</button>
       </div>
     </header>
 
     <div class="info" id="info"></div>
-    <div class="score" id="score"></div>
+    <aside class="side">
+      <div class="score" id="score"></div>
+      <div class="alerts" id="alerts"></div>
+    </aside>
     <div class="toasts" id="toasts"></div>
     <div class="hint hidden" id="hint"></div>
+
+    <div class="eas hidden" id="eas">
+      <div class="eas-title">⚠ EMERGENCY ALERT SYSTEM ⚠</div>
+      <div class="eas-sub" id="eas-sub"></div>
+      <div class="eas-note">(simulated — part of the Radar Spotters game)</div>
+    </div>
+
+    <div class="ticker" id="ticker">
+      <div class="ticker-label" id="ticker-label">SPOTTER NETWORK</div>
+      <div class="ticker-track" id="ticker-track"><span class="ticker-text" id="ticker-text"></span></div>
+    </div>
 
     <footer class="bottom">
       <div class="legend" id="legend">

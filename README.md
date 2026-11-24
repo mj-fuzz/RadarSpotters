@@ -18,6 +18,11 @@ warning, then press on the storm and drag the way it's moving. Storm reports (ha
 pop up as storms do damage: reports inside your warning score points (bonus for lead time and a tight
 box), reports outside are misses, and warnings with no reports are false alarms.
 
+**Alerts:** active warnings are listed on the side, spotter reports scroll across the ticker at the
+bottom, and issuing a Tornado warning sets off a (simulated!) Emergency Alert: flashing banner, red
+ticker, alert tones and a robot voice reading the warning. The tones are deliberately NOT the real EAS
+tones, which may not be used outside real alerts. `M` mutes all sounds.
+
 Other controls: `Space` pause · `+`/`-` speed · `N` new day · drag to pan · scroll/pinch to zoom ·
 `0` reset view · `S` smooth/blocky pixels · `D` cheat mode (shows every storm's type, stage, and path) · `H` help.
 

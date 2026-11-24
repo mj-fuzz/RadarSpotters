@@ -1,5 +1,6 @@
 import './style.css';
-import { WARNING_MINUTES, WarningGame, reportText, type WarningKind } from './game/warnings';
+import { AlertSounds } from './audio/alerts';
+import { WARNING_MINUTES, WarningGame, inside, reportText, type Warning, type WarningKind } from './game/warnings';
 import { Geography, RADAR_ID, compass, type Polyline } from './map/geography';
 import { MODES, Scope, type Mode } from './radar/scope';
 import { Fields, RANGE_KM } from './sim/fields';
@@ -52,6 +53,9 @@ function newDay(): void {
   weather.reset(randomSeed(), dayKey);
   game.reset();
   setWarnMode(null);
+  tickerItems.length = 0;
+  tickerItems.push(`NEW DAY: ${weather.day.label.toUpperCase()} · SPOTTERS ARE STANDING BY`);
+  renderTicker();
   takeScan();
   scope.finishReveal();
 }
@@ -59,6 +63,14 @@ function newDay(): void {
 function clockText(gameMinutes: number): string {
   const total = START_MINUTES + Math.floor(gameMinutes);
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/** "3:45 PM" style time, like a real warning. */
+function ampm(gameMinutes: number): string {
+  const total = START_MINUTES + Math.floor(gameMinutes);
+  const h24 = Math.floor(total / 60) % 24;
+  const h = h24 % 12 || 12;
+  return `${h}:${String(total % 60).padStart(2, '0')} ${h24 >= 12 ? 'PM' : 'AM'}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +159,7 @@ function draw(): void {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   const label = `${RADAR_ID}  ${MODES[mode].product}  ·  scan ${clockText(scope.scanTime)}`;
-  ctx.fillText(label, 12 * dpr, H - 26 * dpr - legendHeight() * dpr);
+  ctx.fillText(label, 12 * dpr, H - 62 * dpr - legendHeight() * dpr);
 }
 
 function legendHeight(): number {
@@ -459,6 +471,126 @@ document.querySelectorAll<HTMLButtonElement>('[data-warn]').forEach((b) =>
   }),
 );
 
+// ---------------------------------------------------------------------------
+// Alerts panel, ticker, EAS, sounds
+// ---------------------------------------------------------------------------
+const sounds = new AlertSounds();
+const alertsEl = $('alerts');
+const tickerEl = $('ticker');
+const tickerLabel = $('ticker-label');
+const tickerTrack = $('ticker-track');
+const tickerText = $('ticker-text');
+const easEl = $('eas');
+const easSub = $('eas-sub');
+const muteBtn = $<HTMLButtonElement>('mute');
+
+// Browsers only allow sound after the first click / key press.
+const unlockAudio = () => sounds.unlock();
+window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
+
+function toggleMute(): void {
+  sounds.setMuted(!sounds.muted);
+  muteBtn.textContent = sounds.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', () => {
+  toggleMute();
+  muteBtn.blur();
+});
+
+/** Which towns a warning covers, e.g. "Hailstone, Gustfield and Redfield". */
+function areaText(w: Warning): string {
+  const names = geo.towns.filter((t) => inside(w.poly, t.x, t.y)).map((t) => t.name);
+  if (names.length === 0) {
+    const cx = w.poly.reduce((a, p) => a + p[0], 0) / w.poly.length;
+    const cy = w.poly.reduce((a, p) => a + p[1], 0) / w.poly.length;
+    return geo.describe(cx, cy);
+  }
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function announceWarning(w: Warning): void {
+  w.areaText = areaText(w);
+  const until = ampm(w.expires);
+  if (w.kind === 'tor') {
+    const headline = `TORNADO WARNING for ${w.areaText} until ${until}`;
+    pushTicker(`⚠ ${headline.toUpperCase()} · TAKE SHELTER NOW`);
+    startEas(
+      headline,
+      `This is the Stormhaven Weather Service. A tornado warning has been issued for ${w.areaText} until ${until}. ` +
+        `Take shelter now in a basement, or an interior room on the lowest floor, away from windows.`,
+    );
+  } else {
+    pushTicker(`SEVERE THUNDERSTORM WARNING FOR ${w.areaText.toUpperCase()} UNTIL ${until}`);
+    sounds.svrAlert();
+  }
+}
+
+let easText = '';
+function startEas(headline: string, speech: string): void {
+  sounds.eas(speech, () => {
+    easEl.classList.add('hidden');
+    tickerEl.classList.remove('eas-on');
+    tickerLabel.textContent = 'SPOTTER NETWORK';
+    easText = '';
+    renderTicker();
+  });
+  // Show it right away (if a second one is queued, it takes over the banner).
+  easSub.textContent = headline.toUpperCase();
+  easEl.classList.remove('hidden');
+  tickerEl.classList.add('eas-on');
+  tickerLabel.textContent = 'EAS ALERT';
+  easText = `EMERGENCY ALERT · ${headline.toUpperCase()} · TAKE SHELTER NOW IN A BASEMENT OR INTERIOR ROOM ON THE LOWEST FLOOR · `;
+  tickerOffset = tickerTrack.clientWidth;
+  renderTicker();
+  window.setTimeout(() => easEl.classList.add('hidden'), 6000); // banner flashes, ticker keeps going
+}
+
+// The ticker: newest items scroll across the bottom of the screen.
+const tickerItems: string[] = ['WELCOME TO THE RADAR SPOTTERS NETWORK · SPOTTER REPORTS WILL APPEAR HERE'];
+let tickerOffset = 0;
+function pushTicker(item: string): void {
+  tickerItems.push(item);
+  if (tickerItems.length > 6) tickerItems.shift();
+  renderTicker();
+}
+function renderTicker(): void {
+  tickerText.textContent = easText ? easText.repeat(3) : tickerItems.join('     ◆     ') + '     ◆     ';
+}
+function scrollTicker(dt: number): void {
+  const w = tickerText.offsetWidth;
+  tickerOffset -= (easText ? 120 : 85) * dt;
+  if (tickerOffset < -w) tickerOffset = tickerTrack.clientWidth;
+  tickerText.style.left = `${tickerOffset}px`;
+}
+
+game.onReport = (r, what, where) => {
+  pushTicker(`SPOTTER REPORT ${ampm(r.time)}: ${what.toUpperCase()} ${where.toUpperCase()}`);
+  sounds.chime();
+};
+game.onExpire = (w) => {
+  pushTicker(`${w.kind === 'tor' ? 'TORNADO' : 'SEVERE THUNDERSTORM'} WARNING FOR ${w.areaText.toUpperCase()} HAS EXPIRED`);
+};
+
+let lastAlerts = '';
+function updateAlerts(): void {
+  const now = weather.time;
+  const active = game.warnings.filter((w) => now < w.expires).sort((a, b) => (a.kind === b.kind ? a.expires - b.expires : a.kind === 'tor' ? -1 : 1));
+  let html = `<div class="alerts-head">ACTIVE ALERTS · ${active.length}</div>`;
+  for (const w of active) {
+    const left = Math.max(0, Math.ceil(w.expires - now));
+    const fresh = w.kind === 'tor' && now - w.issued < 3 ? ' fresh' : '';
+    html +=
+      `<div class="alert ${w.kind}${fresh}"><b>${w.kind === 'tor' ? '🌪 TORNADO WARNING' : '⚠ SEVERE T-STORM WARNING'}</b>` +
+      `${escapeHtml(w.areaText)}<div class="meta">until ${ampm(w.expires)} · ${left} min left · ${w.reports} report${w.reports === 1 ? '' : 's'}</div></div>`;
+  }
+  if (html !== lastAlerts) {
+    lastAlerts = html;
+    alertsEl.innerHTML = html;
+  }
+}
+
 let lastScore = '';
 let lastToasts = '';
 function updateGameHud(): void {
@@ -640,6 +772,7 @@ const endPointer = (e: PointerEvent) => {
       const w = game.issue(warnMode, drawing.x0, drawing.y0, drawing.x1, drawing.y1, weather.time);
       if (w) {
         setWarnMode(null);
+        announceWarning(w);
       } else {
         hintEl.textContent = 'Drag further! Press on the storm and drag the way it is heading.';
       }
@@ -710,6 +843,10 @@ window.addEventListener('keydown', (e) => {
     case 'T':
       setWarnMode(warnMode === 'tor' ? null : 'tor');
       break;
+    case 'm':
+    case 'M':
+      toggleMute();
+      break;
     case 'Escape':
       setWarnMode(null);
       break;
@@ -762,6 +899,8 @@ function frame(now: number): void {
   draw();
   updateHud();
   updateGameHud();
+  updateAlerts();
+  scrollTicker(dt);
   updateReadout();
   requestAnimationFrame(frame);
 }
@@ -777,6 +916,8 @@ syncSpeedButtons();
 takeScan();
 scope.finishReveal();
 game.reset();
+renderTicker();
+tickerOffset = tickerTrack.clientWidth;
 requestAnimationFrame(frame);
 
 // Offline / installable app support (production builds only).

@@ -26,6 +26,8 @@ export interface Warning {
   reports: number;
   /** Set once the warning has been scored at expiry. */
   done: boolean;
+  /** Towns (or a nearby place) inside the warning, for the alert panel and ticker. */
+  areaText: string;
 }
 
 export interface Report {
@@ -63,6 +65,11 @@ export class WarningGame {
   hits = 0;
   misses = 0;
   falseAlarms = 0;
+
+  /** Called when a storm report comes in (for the ticker). */
+  onReport: ((r: Report, what: string, where: string) => void) | null = null;
+  /** Called when a warning expires. */
+  onExpire: ((w: Warning) => void) | null = null;
 
   private nextId = 1;
   private clock = 0;
@@ -120,6 +127,7 @@ export class WarningGame {
       expires: now + WARNING_MINUTES[kind],
       reports: 0,
       done: false,
+      areaText: '',
     };
     this.warnings.push(w);
     return w;
@@ -136,6 +144,7 @@ export class WarningGame {
     for (const w of this.warnings) {
       if (!w.done && now >= w.expires) {
         w.done = true;
+        this.onExpire?.(w);
         if (w.reports === 0) {
           this.falseAlarms++;
           this.score -= 30;
@@ -204,6 +213,7 @@ export class WarningGame {
     this.reports.push(r);
     const what = reportText(r);
     const where = describe(x, y);
+    this.onReport?.(r, what, where);
     if (covering.length) {
       // Best warning: the one issued earliest (most lead time).
       const w = covering.reduce((a, b) => (a.issued <= b.issued ? a : b));
